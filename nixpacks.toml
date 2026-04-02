@@ -1,0 +1,17 @@
+# nixpacks.toml
+[phases.setup]
+nixPkgs = ["...", "netcat"] # Keep netcat for your 8081 health check
+
+[phases.build]
+# Use 'sudo' if the environment is restricted, though usually not needed here
+cmds = [
+  "echo '127.0.0.1 ocsp.apple.com' >> /etc/hosts",
+  "echo '127.0.0.1 ppq.apple.com' >> /etc/hosts",
+  "echo '127.0.0.1 ocsp2.apple.com' >> /etc/hosts",
+  "echo '127.0.0.1 valid.apple.com' >> /etc/hosts",
+  "echo '127.0.0.1 certs.apple.com' >> /etc/hosts"
+]
+
+[start]
+# Your required health-check loop + vproxy launch
+cmd = "(while true; do echo -e 'HTTP/1.1 200 OK\n\n ok' | nc -l -p 8081; done &) && vproxy run --bind 0.0.0.0:$PORT http"
