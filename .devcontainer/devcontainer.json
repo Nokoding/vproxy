@@ -1,6 +1,6 @@
 {
   "name": "vproxy-codespace",
   "image": "mcr.microsoft.com/devcontainers/rust:1",
-  "onCreateCommand": "cargo install vproxy && cargo install bore-cli",
+  "onCreateCommand": "cargo install vproxy && cargo install bore-cli && sudo ln -sf \"$PWD/.devcontainer/restart-proxy.sh\" /usr/local/bin/restart-proxy",
   "postStartCommand": "sh .devcontainer/postStart.sh"
 }
