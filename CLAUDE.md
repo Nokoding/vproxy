@@ -65,6 +65,19 @@ available in the Codespace without a manual reinstall step after a rebuild.
 
 ## Gotchas learned the hard way
 
+- **iOS's native Wi-Fi → Manual proxy settings cannot drive the TLS-cloaked
+  proxy (port 54585 / `cdspc.duckdns.org`).** Confirmed 2026-08-20: iOS's
+  manual proxy screen only has Server/Port/Auth fields, with no way to
+  specify a TLS-secured connection to the proxy itself (unlike macOS's
+  separate "Secure Web Proxy (HTTPS)" section in Network preferences). It
+  sends a plain unencrypted CONNECT to the port, but vproxy there expects a
+  TLS handshake first, so nothing loads — this looked like a broken setup
+  but was actually just an iOS platform limitation; the server side worked
+  fine (verified via curl before the user tested on-device). On iPad, use
+  the plain proxy (`bore.pub:54584`) instead. Reaching the TLS variant from
+  iOS would need a third-party proxy app exposing an explicit "https" proxy
+  type (Shadowrocket, Quantumult X, Surge), not the native Settings app.
+
 - The repo has a `pre-push` hook expecting `git-lfs`, but the base
   `mcr.microsoft.com/devcontainers/rust:1` image doesn't include it and
   there's no `.gitattributes` actually using LFS — so `git push` fails
