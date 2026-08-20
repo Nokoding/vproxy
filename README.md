@@ -10,6 +10,113 @@
 
 A high-performance `HTTP`/`HTTPS`/`SOCKS5` proxy server
 
+## This fork: a self-restarting personal proxy in a free Codespace
+
+This fork of vproxy is wired up as a small, self-healing personal HTTP proxy that
+runs entirely inside a free [GitHub Codespace](https://github.com/features/codespaces)
+and is reachable from anywhere (an iPad, a phone, another laptop) with no server to
+rent and no domain to buy. Everything below lives in `.devcontainer/` and starts
+automatically every time the Codespace boots.
+
+### Why it's built this way
+
+vproxy needs to accept `CONNECT` requests and raw TCP from whatever device is using
+it as a proxy. GitHub Codespaces port forwarding can't do that — it's an
+HTTPS-terminating reverse proxy layer (`*.app.github.dev`), not a raw TCP
+passthrough, so a device dialing a forwarded Codespace port directly gets rejected
+or mangled traffic. (The same limitation is why a `cloudflared` quick tunnel doesn't
+work here either — it's also HTTP(S)-only at Cloudflare's edge.)
+
+The fix is [bore](https://github.com/ekzhang/bore): a plain TCP tunnel. The
+Codespace only ever makes an *outbound* connection to the free public relay at
+`bore.pub`, which does have a real public IP — so `bore.pub` becomes the actual
+address a device connects to, and it forwards raw bytes straight through to vproxy
+running inside the Codespace. No inbound connection to the Codespace itself is ever
+needed.
+
+```
+ iPad / phone  --->  bore.pub:54584  --->  (outbound-only tunnel)  --->  bore client  --->  vproxy:8080
+ (proxy client)      (free public relay)                                (in Codespace)     (in Codespace)
+```
+
+### What's actually running
+
+| Process | File | Job |
+|---|---|---|
+| `vproxy` | — | the HTTP/HTTPS proxy itself, bound to `0.0.0.0:8080` |
+| `bore` | — | tunnels port 8080 out to `bore.pub`, pinned to remote port `54584` |
+| watchdog | `.devcontainer/restart-proxy.sh` | health-checks the proxy every 30s; kills and respawns vproxy/bore on crash *or* hang |
+| `ollama serve` + `llama3.2:3b` | `.devcontainer/ai-triage.sh` | a small model running **locally in the Codespace** (no external API, no cost) that reads the recent logs on every failure and decides whether it's worth emailing about, plus writes a plain-English guess at the cause |
+| email alerts | `.devcontainer/alert-email.sh` | sends the AI's verdict via the [MailerSend](https://www.mailersend.com/) API |
+
+All four are launched by one command, `restart-proxy` (symlinked to
+`/usr/local/bin/restart-proxy`), which itself runs automatically on every Codespace
+start via `postStartCommand`. Each process is wrapped in its own respawn loop, so a
+crash brings it straight back; the watchdog additionally catches the case where
+vproxy is still running but has silently wedged (no crash, so a respawn loop alone
+wouldn't notice). Port `8080` is also flipped to public visibility automatically on
+every run, so nothing here needs a manual fix after a Codespace restart.
+
+If the local model is ever unavailable (still loading, Ollama down, bad output),
+alerting doesn't silently stop — `ai-triage.sh` fails closed and the watchdog falls
+back to a fixed rule (always alert on the first failure in a bad stretch, then throttle
+to once per 15 minutes unless it's clearly getting worse). Recovery itself (the
+kill-and-respawn) always happens immediately and unconditionally — it never waits on
+the model.
+
+### Using the proxy
+
+Point any HTTP proxy client at:
+
+```
+Server: bore.pub
+Port:   54584
+```
+
+That's it — no auth configured. Because it's tunneled through a free, shared public
+relay, expect it to slow down (not fail) under heavy parallel load, e.g. a
+media-heavy page loading many resources at once.
+
+### Operating it
+
+```bash
+# from a terminal inside the Codespace
+restart-proxy
+```
+
+Kills and relaunches everything (vproxy, bore, the watchdog, Ollama), re-publishes
+port 8080, and prints the proxy address. Useful after editing any of the
+`.devcontainer/*.sh` scripts, or if something needs a manual kick.
+
+Logs, if you need them:
+
+```bash
+tail -f /tmp/vproxy.log            # vproxy's own output
+tail -f /tmp/bore.log              # bore tunnel connection log
+tail -f /tmp/proxy-watchdog.log    # health-check failures/restarts, alert decisions
+tail -f /tmp/ollama.log            # local model server log
+```
+
+### One-time setup this repo needs
+
+Email alerts need two [Codespaces secrets](https://github.com/settings/codespaces)
+(Settings → Codespaces secrets → New secret, scoped to this repo) — never commit
+these to the repo itself:
+
+- `MAILERSEND_API_TOKEN` — a MailerSend API token scoped to **Email: send** only
+  (no need for full account access)
+- `MAILERSEND_FROM` — the sender address MailerSend gave you (e.g.
+  `alerts@yoursubdomain.mlsender.net` for a trial domain)
+
+Codespaces secrets are only injected into the environment when the Codespace
+*starts* — after adding or changing one, stop and restart the Codespace (Command
+Palette → "Codespaces: Stop Current Codespace", then reopen it) rather than just
+opening a new terminal.
+
+Everything else (vproxy, bore, Ollama + the model) installs itself automatically the
+first time the Codespace is created, via `onCreateCommand` in
+`.devcontainer/devcontainer.json`.
+
 ## Features
 
 - Proxy extensions
