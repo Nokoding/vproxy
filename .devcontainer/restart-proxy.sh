@@ -9,6 +9,7 @@
 pkill -f 'vproxy run' 2>/dev/null
 pkill -f 'bore local 8080' 2>/dev/null
 pkill -f 'PROXY_WATCHDOG' 2>/dev/null
+pkill -f 'ollama serve' 2>/dev/null
 sleep 0.5
 
 # Resolve the real script directory even when invoked through the
@@ -16,7 +17,8 @@ sleep 0.5
 # resolve to /usr/local/bin instead of this repo's .devcontainer/).
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 ALERT_SCRIPT="$SCRIPT_DIR/alert-email.sh"
-export ALERT_SCRIPT
+AI_TRIAGE_SCRIPT="$SCRIPT_DIR/ai-triage.sh"
+export ALERT_SCRIPT AI_TRIAGE_SCRIPT
 rm -f /tmp/proxy-alert-unhealthy /tmp/proxy-alert-count /tmp/proxy-alert-lastalert
 
 # vproxy and bore both respawn immediately if they crash/exit. Each
@@ -41,16 +43,35 @@ while true; do
   sleep 1
 done' > /dev/null 2>&1 &
 
+# Local model server for ai-triage.sh (see below). OLLAMA_KEEP_ALIVE=-1
+# keeps the model resident in RAM indefinitely instead of the 5-minute
+# default, so a failure after a quiet stretch doesn't pay the ~30s
+# reload cost. Pre-warm with a throwaway request so it's already loaded
+# before the first real failure ever needs it.
+nohup env OLLAMA_KEEP_ALIVE=-1 sh -c '
+while true; do
+  ollama serve >> /tmp/ollama.log 2>&1 &
+  echo $! > /tmp/ollama.pid
+  wait $!
+  sleep 1
+done' > /dev/null 2>&1 &
+(sleep 3; curl -s -m 60 http://127.0.0.1:11434/api/chat -d '{"model":"llama3.2:3b","stream":false,"messages":[{"role":"user","content":"hi"}]}' > /dev/null 2>&1) &
+
 # Watchdog for the case where vproxy hangs instead of exiting (no crash,
 # so the loop above wouldn't catch it): every 30s, send a real request
 # through the local proxy with a 5s timeout. If that times out, kill
 # both by PID — the respawn loops above bring them straight back.
 #
-# Email alerts (via alert-email.sh) are throttled instead of firing on
-# every single check: the first failure after a healthy stretch always
-# alerts immediately, repeats are suppressed for 15 min unless the
-# problem is clearly escalating (every 3rd failure in a bad stretch
-# still alerts), and one more email fires on recovery.
+# Alert-worthiness and diagnosis come from a local Ollama model
+# (ai-triage.sh) fed the recent log tails and failure history -- it
+# decides whether this specific failure is worth emailing about and
+# writes a plain-English guess at the cause, instead of a fixed timer.
+# If Ollama is down/slow/returns something unusable, ai-triage.sh exits
+# 1 and we fall back to the old fixed-throttle rule (first failure
+# always alerts, then throttled to 15 min unless escalating), so
+# alerting never silently depends on the model being up. Recovery kill
+# +respawn above already happened unconditionally before any of this,
+# so the ~10-15s the model takes never delays actual recovery.
 nohup sh -c '
 while true; do # PROXY_WATCHDOG
   sleep 30
@@ -66,8 +87,26 @@ while true; do # PROXY_WATCHDOG
     echo 1 > /tmp/proxy-alert-unhealthy
     echo "$count" > /tmp/proxy-alert-count
 
-    if [ "$was_unhealthy" = 0 ] || [ $(( now - last )) -ge 900 ] || [ $(( count % 3 )) -eq 0 ]; then
-      "$ALERT_SCRIPT" "vproxy proxy issue detected" "Health check timed out at $(date). Restarting vproxy + bore. Failure #$count in this bad stretch."
+    if [ "$last" = 0 ]; then since_last="never"; else since_last=$(( now - last )); fi
+    ai_result=$("$AI_TRIAGE_SCRIPT" "$count" "$since_last" 2>/dev/null)
+
+    if [ -n "$ai_result" ]; then
+      should_alert=$(printf "%s" "$ai_result" | jq -r ".should_alert")
+      subject=$(printf "%s" "$ai_result" | jq -r ".subject")
+      diagnosis=$(printf "%s" "$ai_result" | jq -r ".diagnosis")
+    else
+      echo "$(date): ai-triage unavailable, using fallback throttle rule" >> /tmp/proxy-watchdog.log
+      if [ "$was_unhealthy" = 0 ] || [ $(( now - last )) -ge 900 ] || [ $(( count % 3 )) -eq 0 ]; then
+        should_alert=true
+      else
+        should_alert=false
+      fi
+      subject="vproxy proxy issue detected"
+      diagnosis="Health check timed out at $(date). Restarting vproxy + bore. Failure #$count in this bad stretch. (AI triage unavailable, used fallback rule.)"
+    fi
+
+    if [ "$should_alert" = "true" ]; then
+      "$ALERT_SCRIPT" "$subject" "$diagnosis"
       echo "$now" > /tmp/proxy-alert-lastalert
     fi
   else
