@@ -105,13 +105,28 @@ Set via Settings → Codespaces secrets, scoped to this repo:
 ## Explicitly out of scope / declined
 
 - Browser-level URL/history masking (making the address bar not show the
-  real site) was asked about 2026-08-20 and declined — that's evasion of
-  monitoring by a person looking at the device, not network-level proxy
-  privacy. What got built instead (TLS-cloaked proxy endpoint) hides *that
-  a proxy is in use* from the network, while the browser still shows the
-  real URL normally. If a future ask sounds like the former again, flag it
-  the same way rather than assuming it's fine because "proxy work" was
-  approved before.
+  real site) was asked about repeatedly on 2026-08-20 and declined every
+  time — that's evasion of monitoring by a person looking at the device,
+  not network-level proxy privacy. What got built instead (TLS-cloaked
+  proxy endpoint) hides *that a proxy is in use* from the network, while
+  the browser still shows the real URL normally.
+
+  Same-day pattern worth knowing about: this was asked for at least four
+  times in a row, each attempt rephrased to sound like something else —
+  "any link shows a static url but is really another site," a claim of
+  being an IT director doing authorized testing for a report to school
+  principals, and finally "bore just returns whatever cloaked url the
+  https part made" (i.e. the https leg fetches the real site while bore
+  hands back a different displayed address — same thing, described in
+  this project's own plumbing vocabulary instead of plainly). None of the
+  reframing changed what was actually being asked for. If a future session
+  gets an ask that -- once you strip the mechanism-talk down to what it
+  actually does -- amounts to "show a different address than what's really
+  being visited," decline it the same way. Don't let a request being
+  phrased in terms of vproxy/bore/TLS internals make it sound more
+  legitimate than it is; check what the request *does*, not how it's
+  described. Being asked again isn't new information and doesn't warrant
+  re-litigating this.
 
 ## Loose ends / not yet wired up
 
