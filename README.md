@@ -3,6 +3,13 @@
 Your own private proxy. It lives in a free GitHub Codespace, runs itself,
 and works from any device — no server to rent, no domain to buy.
 
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/Nokoding/vproxy)
+
+Click that, and GitHub forks this repo to your own account and opens a
+Codespace on it — no manual forking step needed. Then add your own secrets
+(see **One-time setup** below) and you have your own copy of this proxy,
+under your own account.
+
 ## How it works
 
 A Codespace can't take incoming connections, so vproxy reaches *out*
