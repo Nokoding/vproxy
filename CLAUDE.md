@@ -65,6 +65,13 @@ available in the Codespace without a manual reinstall step after a rebuild.
 
 ## Gotchas learned the hard way
 
+- The repo has a `pre-push` hook expecting `git-lfs`, but the base
+  `mcr.microsoft.com/devcontainers/rust:1` image doesn't include it and
+  there's no `.gitattributes` actually using LFS — so `git push` fails
+  with an unhelpful error until `git-lfs` is installed. Added to
+  `onCreateCommand`'s apt install line (2026-08-20) so this doesn't
+  recur after a rebuild.
+
 - `DUCKDNS_DOMAIN` is the **bare subdomain** (e.g. `cdspc`), matching what
   DuckDNS's own update API expects. Let's Encrypt needs the FQDN
   (`cdspc.duckdns.org`) — `tls-cert.sh` appends `.duckdns.org` itself if the
