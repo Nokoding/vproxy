@@ -43,13 +43,20 @@ needed.
 
 | Process | File | Job |
 |---|---|---|
-| `vproxy` | — | the HTTP/HTTPS proxy itself, bound to `0.0.0.0:8080` |
-| `bore` | — | tunnels port 8080 out to `bore.pub`, pinned to remote port `54584` |
+| `vproxy` (plain) | — | the HTTP proxy, bound to `0.0.0.0:8080` |
+| `vproxy` (TLS) | — | a second instance in `https` mode, bound to `0.0.0.0:8443`, presenting a real cert for `<DUCKDNS_DOMAIN>.duckdns.org` |
+| `bore` ×2 | — | tunnels port 8080 out to `bore.pub:54584` (plain) and port 8443 to `bore.pub:54585` (TLS) |
+| `acme.sh` | `.devcontainer/tls-cert.sh` | issues/renews the Let's Encrypt cert for the TLS proxy via a DuckDNS DNS-01 challenge (no inbound port needed); cached and only reissued when close to expiry |
 | watchdog | `.devcontainer/restart-proxy.sh` | health-checks the proxy every 30s; kills and respawns vproxy/bore on crash *or* hang |
 | `ollama serve` + `llama3.2:3b` | `.devcontainer/ai-triage.sh` | a small model running **locally in the Codespace** (no external API, no cost) that reads the recent logs on every failure and decides whether it's worth emailing about, plus writes a plain-English guess at the cause |
 | email alerts | `.devcontainer/alert-email.sh` | sends the AI's verdict via the [MailerSend](https://www.mailersend.com/) API |
 
-All four are launched by one command, `restart-proxy` (symlinked to
+The TLS variant exists so the proxy can pass as ordinary HTTPS traffic (a
+normal TLS handshake to a real hostname) on networks that block or inspect
+plain HTTP proxying — the plain HTTP one keeps running regardless, and if
+cert issuance ever fails, only the TLS variant is skipped.
+
+All of the above are launched by one command, `restart-proxy` (symlinked to
 `/usr/local/bin/restart-proxy`), which itself runs automatically on every Codespace
 start via `postStartCommand`. Each process is wrapped in its own respawn loop, so a
 crash brings it straight back; the watchdog additionally catches the case where
@@ -66,16 +73,28 @@ the model.
 
 ### Using the proxy
 
-Point any HTTP proxy client at:
+Plain HTTP proxy — works everywhere, but is recognizable as proxy traffic to
+anything inspecting the connection:
 
 ```
 Server: bore.pub
 Port:   54584
 ```
 
-That's it — no auth configured. Because it's tunneled through a free, shared public
-relay, expect it to slow down (not fail) under heavy parallel load, e.g. a
-media-heavy page loading many resources at once.
+TLS ("HTTPS" / "secure") proxy — same proxy, but the connection itself looks
+like an ordinary HTTPS request to a real hostname, for networks that block or
+inspect plain HTTP proxying:
+
+```
+Server: cdspc.duckdns.org
+Port:   54585
+```
+
+Use whichever your device/app's proxy settings support (look for a "secure
+proxy" or "HTTPS proxy" toggle to select the TLS one). No auth configured on
+either. Because both are tunneled through a free, shared public relay, expect
+slowdowns (not failures) under heavy parallel load, e.g. a media-heavy page
+loading many resources at once.
 
 ### Operating it
 
@@ -91,15 +110,18 @@ port 8080, and prints the proxy address. Useful after editing any of the
 Logs, if you need them:
 
 ```bash
-tail -f /tmp/vproxy.log            # vproxy's own output
-tail -f /tmp/bore.log              # bore tunnel connection log
+tail -f /tmp/vproxy.log            # plain HTTP vproxy output
+tail -f /tmp/vproxy-tls.log        # TLS vproxy output
+tail -f /tmp/bore.log              # bore tunnel (plain) connection log
+tail -f /tmp/bore-tls.log          # bore tunnel (TLS) connection log
+tail -f /tmp/acme.log              # Let's Encrypt cert issuance/renewal
 tail -f /tmp/proxy-watchdog.log    # health-check failures/restarts, alert decisions
 tail -f /tmp/ollama.log            # local model server log
 ```
 
 ### One-time setup this repo needs
 
-Email alerts need two [Codespaces secrets](https://github.com/settings/codespaces)
+Email alerts and the TLS proxy need four [Codespaces secrets](https://github.com/settings/codespaces)
 (Settings → Codespaces secrets → New secret, scoped to this repo) — never commit
 these to the repo itself:
 
@@ -107,6 +129,11 @@ these to the repo itself:
   (no need for full account access)
 - `MAILERSEND_FROM` — the sender address MailerSend gave you (e.g.
   `alerts@yoursubdomain.mlsender.net` for a trial domain)
+- `DUCKDNS_TOKEN` — your [DuckDNS](https://www.duckdns.org/) account token; used
+  both to keep the domain pointed at bore.pub's current IP and to complete the
+  DNS-01 challenge for the TLS proxy's Let's Encrypt certificate
+- `DUCKDNS_DOMAIN` — the bare subdomain you registered on DuckDNS (e.g. `cdspc`
+  for `cdspc.duckdns.org`), no `.duckdns.org` suffix
 
 Codespaces secrets are only injected into the environment when the Codespace
 *starts* — after adding or changing one, stop and restart the Codespace (Command

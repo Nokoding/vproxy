@@ -8,6 +8,7 @@
 
 pkill -f 'vproxy run' 2>/dev/null
 pkill -f 'bore local 8080' 2>/dev/null
+pkill -f 'bore local 8443' 2>/dev/null
 pkill -f 'PROXY_WATCHDOG' 2>/dev/null
 pkill -f 'ollama serve' 2>/dev/null
 sleep 0.5
@@ -42,6 +43,34 @@ while true; do
   wait $!
   sleep 1
 done' > /dev/null 2>&1 &
+
+# HTTPS proxy variant: presents a real Let's Encrypt cert for
+# $DUCKDNS_DOMAIN (see tls-cert.sh) so a device connecting via TLS to
+# cdspc.duckdns.org sees an ordinary HTTPS handshake instead of
+# unencrypted proxy CONNECT traffic on a bare port -- lets the proxy work
+# on networks that inspect/block plain HTTP proxying but allow generic
+# HTTPS. Purely additive: if cert issuance fails for any reason, this
+# block just doesn't start and the plain HTTP proxy above is unaffected.
+TLS_CERT_DIR="$HOME/.vproxy-tls"
+if "$SCRIPT_DIR/tls-cert.sh"; then
+  nohup sh -c "
+  while true; do
+    vproxy run --bind 0.0.0.0:8443 https --tls-cert '$TLS_CERT_DIR/fullchain.pem' --tls-key '$TLS_CERT_DIR/key.pem' >> /tmp/vproxy-tls.log 2>&1 &
+    echo \$! > /tmp/vproxy-tls.pid
+    wait \$!
+    sleep 1
+  done" > /dev/null 2>&1 &
+
+  nohup sh -c '
+  while true; do
+    bore local 8443 --to bore.pub --port 54585 >> /tmp/bore-tls.log 2>&1 &
+    echo $! > /tmp/bore-tls.pid
+    wait $!
+    sleep 1
+  done' > /dev/null 2>&1 &
+else
+  echo "$(date): TLS cert unavailable, HTTPS proxy variant not started (plain HTTP still up)" >> /tmp/proxy-watchdog.log
+fi
 
 # Local model server for ai-triage.sh (see below). OLLAMA_KEEP_ALIVE=-1
 # keeps the model resident in RAM indefinitely instead of the 5-minute
@@ -118,10 +147,13 @@ while true; do # PROXY_WATCHDOG
   fi
 done' > /dev/null 2>&1 &
 
-# Re-assert port 8080 as public every time (covers first boot and any
-# time Codespaces resets it) so it never has to be done by hand.
+# Re-assert ports 8080/8443 as public every time (covers first boot and
+# any time Codespaces resets it) so it never has to be done by hand. Not
+# actually required for bore itself (it's an outbound tunnel, unaffected
+# by Codespaces port visibility) but kept for direct access/debugging.
 if [ -n "$CODESPACE_NAME" ]; then
   gh codespace ports visibility 8080:public --codespace "$CODESPACE_NAME" >/dev/null 2>&1
+  gh codespace ports visibility 8443:public --codespace "$CODESPACE_NAME" >/dev/null 2>&1
 fi
 
 # Keep the DuckDNS record (used for the URL-cloaking reverse proxy)
@@ -136,4 +168,10 @@ fi
 
 sleep 1
 echo "vproxy + bore restarted (auto-restart on crash or timeout is active)."
-echo "proxy address: bore.pub:54584"
+echo "proxy address (http):  bore.pub:54584"
+case "$DUCKDNS_DOMAIN" in
+  *.*) DUCKDNS_FQDN="$DUCKDNS_DOMAIN" ;;
+  ?*) DUCKDNS_FQDN="${DUCKDNS_DOMAIN}.duckdns.org" ;;
+  *) DUCKDNS_FQDN="<DUCKDNS_DOMAIN unset>" ;;
+esac
+echo "proxy address (https): ${DUCKDNS_FQDN}:54585 (only if TLS cert issuance succeeded, see /tmp/acme.log)"
