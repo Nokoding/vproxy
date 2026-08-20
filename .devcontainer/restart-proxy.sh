@@ -124,6 +124,16 @@ if [ -n "$CODESPACE_NAME" ]; then
   gh codespace ports visibility 8080:public --codespace "$CODESPACE_NAME" >/dev/null 2>&1
 fi
 
+# Keep the DuckDNS record (used for the URL-cloaking reverse proxy)
+# pointed at bore.pub's current IP -- resolved fresh each run rather
+# than hardcoded, in case bore.pub ever moves servers.
+if [ -n "$DUCKDNS_TOKEN" ] && [ -n "$DUCKDNS_DOMAIN" ]; then
+  BORE_IP=$(getent ahostsv4 bore.pub 2>/dev/null | head -1 | awk '{print $1}')
+  if [ -n "$BORE_IP" ]; then
+    curl -s -m 10 "https://www.duckdns.org/update?domains=${DUCKDNS_DOMAIN}&token=${DUCKDNS_TOKEN}&ip=${BORE_IP}" >> /tmp/duckdns.log 2>&1
+  fi
+fi
+
 sleep 1
 echo "vproxy + bore restarted (auto-restart on crash or timeout is active)."
 echo "proxy address: bore.pub:54584"
