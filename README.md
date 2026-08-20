@@ -1,14 +1,9 @@
 # vproxy
 
-[![CI](https://github.com/0x676e67/vproxy/actions/workflows/ci.yml/badge.svg)](https://github.com/0x676e67/vproxy/actions/workflows/ci.yml)
-[![Crates.io License](https://img.shields.io/crates/l/vproxy)](./LICENSE)
-![Crates.io MSRV](https://img.shields.io/crates/msrv/vproxy)
-[![crates.io](https://img.shields.io/crates/v/vproxy.svg)](https://crates.io/crates/vproxy)
-[![Crates.io Total Downloads](https://img.shields.io/crates/d/vproxy)](https://crates.io/crates/vproxy)
-
-> 🚀 Help me work seamlessly with open source sharing by [sponsoring me on GitHub](https://github.com/0x676e67/0x676e67/blob/main/SPONSOR.md)
-
-A high-performance `HTTP`/`HTTPS`/`SOCKS5` proxy server
+A personal fork of [0x676e67/vproxy](https://github.com/0x676e67/vproxy), a
+high-performance `HTTP`/`HTTPS`/`SOCKS5` proxy server, wired up below to run
+as a self-healing personal proxy inside a free GitHub Codespace. License:
+[GPL-3.0](./LICENSE).
 
 ## This fork: a self-restarting personal proxy in a free Codespace
 
@@ -144,7 +139,15 @@ Everything else (vproxy, bore, Ollama + the model) installs itself automatically
 first time the Codespace is created, via `onCreateCommand` in
 `.devcontainer/devcontainer.json`.
 
-## Features
+## Upstream vproxy reference
+
+<details>
+
+<summary>CLI manual, install methods, protocol config, and benchmarks for the
+underlying vproxy binary itself (not specific to this fork's Codespace
+setup) — expand if you need to run vproxy manually or tune it directly</summary>
+
+### Features
 
 - Proxy extensions
 - Concurrency limits 
@@ -155,7 +158,7 @@ first time the Codespace is created, via `onCreateCommand` in
 - Service binding to specific `CIDR` addresses
 - SOCKS5: `CONNECT`/`BIND`/`ASSOCIATE`  
 
-## Manual
+### Manual
 
 ```shell
 $ vproxy -h
@@ -179,13 +182,13 @@ Options:
   -V, --version  Print version
 ```
 
-## Installation
+### Installation
 
 <details>
 
 <summary>If you need more detailed installation and usage information, please check here</summary>
 
-### Install
+#### Install
 
 - curl
 
@@ -211,7 +214,7 @@ cargo install vproxy
 docker run --rm -it ghcr.io/0x676e67/vproxy:latest run http
 ```
 
-### Note
+#### Note
 
 If you run the program as root, it will automatically configure the sysctl `net.ipv6.ip_nonlocal_bind=1`, `net.ipv6.conf.all.disable_ipv6`, and `ip route add local 2001:470:e953::/48 dev lo` for you. Otherwise you will need to configure these settings manually.
 
@@ -263,7 +266,7 @@ while true; do curl -x http://127.0.0.1:8100 -s https://api.ip.sb/ip -A Mozilla;
 
 ```
 
-### Multi-Protocol Support
+#### Multi-Protocol Support
 
 vproxy supports multiple types of proxy servers with flexible configuration options. HTTP, HTTPS, and SOCKS5 proxies can run independently, or use the auto-detection mode to handle all protocols on a single port. Each server type supports authentication, custom binding addresses, and advanced socket configurations.
 
@@ -333,7 +336,7 @@ Append `-session-id` to the username, where session is a fixed value and ID is a
 
 Append `-range-id` to the username, where range is a fixed value and ID is any random value (e.g. `username-range-123456`). By keeping the Range ID unchanged, you can use a fixed CIDR range in a fixed range. in addition, you must set the startup parameter `--cidr-range`, and the length is within a valid range.
 
-### Examples
+#### Examples
 
 - Http proxy session with username and password:
 
@@ -386,13 +389,13 @@ $ for i in `seq 1 3`; do curl -x "socks5h://test-ttl-2:test@127.0.0.1:1080" http
 
 </details>
 
-## Benchmark
+### Benchmark
 
 <details>
 
 <summary>If you need more detailed benchmark information, please check here</summary>
 
-### Hardware/Software
+#### Hardware/Software
 
 - CPU: Apple M3 Max (16) @ 4.06 GHz
 - OS: Ubuntu 25.04 aarch64 (6.15.11-orbstack-00542-g4f455d264886)
@@ -401,13 +404,13 @@ $ for i in `seq 1 3`; do curl -x "socks5h://test-ttl-2:test@127.0.0.1:1080" http
 
 > Tests performed in virtualized environment (OrbStack). Performance may vary due to VM overhead and resource sharing.
 
-### Topology
+#### Topology
 
 ```bash
 iperf3 server <---> socks5 server <---> iperf3 client
 ```
 
-### vproxy
+#### vproxy
 
 1. version `vproxy 2.5.1`
 2. repository: `https://github.com/0x676e67/vproxy`
@@ -493,7 +496,7 @@ $ proxychains iperf3 -c 127.0.0.1 -R -P 10
 [SUM]   0.00-10.00  sec   427 GBytes   367 Gbits/sec                  receiver
 ```
 
-### hev-socks5-server
+#### hev-socks5-server
 
 1. version `hev-socks5-server 2.7.0`
 2. repository: `https://github.com/heiher/hev-socks5-server`
@@ -580,7 +583,7 @@ $ proxychains iperf3 -c 127.0.0.1 -R -P 10
 [SUM]   0.00-10.00  sec   451 GBytes   387 Gbits/sec                  receiver
 ```
 
-### fast-socks5
+#### fast-socks5
 
 1. version `fast-socks5 1.0.0-rc.0`
 2. repository: `https://github.com/dizda/fast-socks5`
@@ -668,15 +671,10 @@ $ proxychains iperf3 -c 127.0.0.1 -R -P 10
 
 </details>
 
-
-## Contributing
-
-If you would like to submit your contribution, please open a [Pull Request](https://github.com/0x676e67/vproxy/pulls).
-
-## Getting help
-
-Your question might already be answered on the [issues](https://github.com/0x676e67/vproxy/issues)
+</details>
 
 ## License
 
-**vproxy** © [0x676e67](https://github.com/0x676e67), Released under the [GPL-3.0](./LICENSE) License.
+Original **vproxy** © [0x676e67](https://github.com/0x676e67), released under
+the [GPL-3.0](./LICENSE) License. This fork's Codespace/proxy-cloaking setup
+carries the same license.
