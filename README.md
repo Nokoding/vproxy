@@ -43,58 +43,21 @@ fail) under heavy load, like a page loading a lot of images at once.
 ## It fixes itself
 
 Everything restarts on its own if it crashes, hangs, or the Codespace
-reboots. Nothing here needs a manual restart — but if you ever want to
-force one:
+reboots — including a self-test against four real sites (Discord, TikTok,
+YouTube, Google) every time it starts, with an email either way so you
+never have to go check yourself. Nothing here needs a manual restart, but
+`restart-proxy` forces one if you ever want to.
 
-```bash
-restart-proxy
-```
-
-That one command restarts vproxy, the tunnel, the health checks, and the
-small AI that watches for trouble, then prints the current addresses.
-
-Logs, if you want them:
-
-```bash
-tail -f /tmp/vproxy.log            # the regular proxy
-tail -f /tmp/vproxy-tls.log        # the secure proxy
-tail -f /tmp/bore.log              # the tunnel (regular)
-tail -f /tmp/bore-tls.log          # the tunnel (secure)
-tail -f /tmp/proxy-watchdog.log    # health checks and restarts
-tail -f /tmp/ollama.log            # the local AI
-tail -f /tmp/acme.log              # the secure certificate
-```
-
-## What's running
-
-A small stack, watching itself:
-
-- **vproxy** — the proxy, running twice (regular and secure)
-- **bore** — the tunnel out to the internet, also running twice
-- **A watchdog** — checks every 30 seconds that things actually work, not
-  just that they're still alive
-- **A local AI model** — reads the logs when something fails and decides
-  whether it's worth an email
-- **Email alerts** — sent only when the AI (or a simple backup rule, if
-  the AI is ever unavailable) thinks you should know
+→ **[How the self-healing works, the AI triage, and the logs](docs/self-healing.md)**
 
 ## One-time setup
 
 Add four secrets at
 [github.com/settings/codespaces](https://github.com/settings/codespaces),
-scoped to this repo. Never put these in the code itself.
+scoped to this repo, then stop and restart the Codespace. Everything else
+installs itself the first time the Codespace is created.
 
-| Secret | What it's for |
-|---|---|
-| `MAILERSEND_API_TOKEN` | Sends the alert emails |
-| `MAILERSEND_FROM` | The address alerts come from |
-| `DUCKDNS_TOKEN` | Keeps the domain pointed at the tunnel, and proves ownership for the secure certificate |
-| `DUCKDNS_DOMAIN` | Your domain's short name (e.g. `cdspc`, not `cdspc.duckdns.org`) |
-
-After adding or changing a secret, stop and restart the Codespace — a new
-terminal isn't enough.
-
-Everything else installs itself the first time the Codespace is created.
+→ **[What each secret is for and where to get it](docs/setup.md)**
 
 ## Built on
 

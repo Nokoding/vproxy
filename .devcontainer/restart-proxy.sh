@@ -166,6 +166,13 @@ if [ -n "$DUCKDNS_TOKEN" ] && [ -n "$DUCKDNS_DOMAIN" ]; then
   fi
 fi
 
+# Startup smoke test against the 4 sites the user actually uses this proxy
+# for (discord/tiktok/youtube/google): self-repairs via kill+respawn on
+# failure and always emails the result (see quick-test-runner.sh). Delayed
+# and backgrounded so it runs once vproxy/bore/ollama have had a moment to
+# come up, without blocking this script's own exit.
+(sleep 8; "$SCRIPT_DIR/quick-test-runner.sh" >> /tmp/quick-test.log 2>&1) &
+
 sleep 1
 echo "vproxy + bore restarted (auto-restart on crash or timeout is active)."
 echo "proxy address (http):  bore.pub:54584"

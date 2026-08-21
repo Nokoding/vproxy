@@ -3,15 +3,26 @@
 This is a fork of upstream `vproxy` repurposed as a free, self-healing
 personal proxy running inside a GitHub Codespace. The upstream project
 (HTTP/HTTPS/SOCKS5 proxy server) is basically untouched; everything specific
-to this fork lives in `.devcontainer/`. See `README.md` ("This fork" section)
-for the user-facing writeup — this file is the running internal context,
-kept up to date after every change so a future session (including after a
-Codespace rebuild, which wipes the container but not git or Codespaces
-secrets) doesn't have to re-derive it from commit history.
+to this fork lives in `.devcontainer/`. `README.md` (plus `docs/setup.md`
+and `docs/self-healing.md`, which it links out to) is the user-facing
+writeup — this file is the running internal context, kept up to date after
+every change so a future session (including after a Codespace rebuild,
+which wipes the container but not git or Codespaces secrets) doesn't have
+to re-derive it from commit history.
 
-**Keep this file updated after every change made in this repo.** Add to it,
-don't just append — fold new facts into the relevant section, and remove
-anything that's no longer true.
+**Update this file after every change made in this repo, and especially
+after any big/structural change** (new component, changed architecture,
+new secret, new failure mode) **— don't let it go stale.** Add to it, don't
+just append — fold new facts into the relevant section, and remove
+anything that's no longer true. If a change also affects what a user
+forking this repo needs to know, update `README.md` and the relevant
+`docs/*.md` page too, not just this file.
+
+`AGENTS.md` is a symlink to this file, so any AI coding tool that looks for
+the generic `AGENTS.md` convention (not just Claude Code) gets this same
+context automatically if the repo is forked and opened in a Codespace.
+Keep editing `CLAUDE.md` as the real file — don't break the symlink by
+writing to `AGENTS.md` directly or making it a separate copy.
 
 ## What's running and why
 
@@ -38,6 +49,19 @@ anything that's no longer true.
   triages failures to decide alert-worthiness, falling back to a fixed
   throttle rule if Ollama's unavailable. Alerts go out via MailerSend to
   nokodash311@gmail.com.
+- On every startup, `restart-proxy.sh` backgrounds `quick-test-runner.sh`
+  (after an 8s delay) to prove the proxy can actually reach the 4 sites the
+  user tests with by hand — discord.com, tiktok.com, youtube.com,
+  google.com — through both the plain (8080) and TLS (8443, if up) proxy
+  variants (`quick-test.sh` does the actual checks). All pass → email
+  "all good" with a one-line Ollama comment. Anything fails → kill+respawn
+  vproxy/bore by PID (same recovery the 30s watchdog uses), email that a
+  repair was attempted, retest, and email those results too. If the retest
+  still fails, ask Ollama for one non-destructive next step, write full
+  details to a new dated file under `.devcontainer/notes/`, and append a
+  one-line pointer to this file (auto-read every session) so the next
+  Claude Code session picks it up without hunting for a log. Added
+  2026-08-21.
 - `acme.sh` issues/renews the Let's Encrypt cert for the TLS proxy via a
   DuckDNS DNS-01 challenge (no inbound port needed). Cached in
   `~/.vproxy-tls/`, only reissued when <20 days from expiry, to stay well
@@ -64,6 +88,19 @@ curl -fsSL claude.ai/install.sh | bash`) so a Claude Code session is always
 available in the Codespace without a manual reinstall step after a rebuild.
 
 ## Gotchas learned the hard way
+
+- The base `mcr.microsoft.com/devcontainers/rust:1` image does **not**
+  include `gh` (GitHub CLI) — confirmed 2026-08-21 that it was completely
+  absent, meaning every `gh codespace ports visibility` call in
+  `restart-proxy.sh` had been silently failing (output is redirected to
+  `/dev/null`, and the whole block is best-effort so nothing else broke).
+  `jq` happened to already be present (pulled in incidentally by something
+  else in the image) but wasn't actually declared as a dependency either.
+  Both are now explicit in `onCreateCommand`'s apt install line
+  (`zstd git-lfs jq gh`) so a rebuild doesn't silently lose either one. `gh`
+  needs no extra apt source on this image — it's in Debian trixie's default
+  repos. It authenticates automatically via the Codespaces-injected
+  `GITHUB_TOKEN`, no login step needed.
 
 - **iOS's native Wi-Fi → Manual proxy settings cannot drive the TLS-cloaked
   proxy (port 54585 / `cdspc.duckdns.org`).** Confirmed 2026-08-20: iOS's
