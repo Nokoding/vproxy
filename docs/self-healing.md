@@ -65,3 +65,20 @@ tail -f /tmp/quick-test.log        # the startup self-test
 tail -f /tmp/ollama.log            # the local AI
 tail -f /tmp/acme.log              # the secure certificate
 ```
+
+## Checking port health directly
+
+If something seems down, `port-check` gives a direct read on both proxy
+ports — process alive, port actually listening, a local test request, and
+a real request through the public tunnel:
+
+```bash
+port-check
+```
+
+**Important:** the Codespaces "Ports" tab (and `gh codespace ports`) does
+**not** need to list 8080 or 8443 for the proxy to be working. bore opens
+its own outbound connection to `bore.pub`, completely separate from
+Codespaces' own port-forwarding — so those ports showing as absent/offline
+there is normal, not a sign of a problem. `port-check` is the accurate
+signal; the Ports tab isn't.

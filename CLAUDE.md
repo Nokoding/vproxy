@@ -49,6 +49,14 @@ writing to `AGENTS.md` directly or making it a separate copy.
   triages failures to decide alert-worthiness, falling back to a fixed
   throttle rule if Ollama's unavailable. Alerts go out via MailerSend to
   nokodash311@gmail.com.
+- `port-check.sh` (symlinked to `/usr/local/bin/port-check`, same pattern
+  as `restart-proxy`) is an on-demand troubleshooting command: for each
+  proxy port, reports process-alive, actually-listening, a local curl
+  test, bore tunnel connection status (from the log), and a real curl
+  through the public tunnel. Added 2026-08-21 after confirming live that
+  everything can check out fully healthy end-to-end while `gh codespace
+  ports` lists neither 8080 nor 8443 at all — see the gotcha below. Always
+  exits 0; it's a diagnostic report, not a health gate.
 - On every startup, `restart-proxy.sh` backgrounds `quick-test-runner.sh`
   (after an 8s delay) to prove the proxy can actually reach the 4 sites the
   user tests with by hand — discord.com, tiktok.com, youtube.com,
@@ -88,6 +96,18 @@ curl -fsSL claude.ai/install.sh | bash`) so a Claude Code session is always
 available in the Codespace without a manual reinstall step after a rebuild.
 
 ## Gotchas learned the hard way
+
+- **`gh codespace ports` (and the Codespaces "Ports" UI tab) will not list
+  8080 or 8443, ever, and that's normal.** Confirmed 2026-08-21 while
+  investigating a "the ports aren't online" report from the user: process
+  alive, port listening, local curl, and a real curl through the public
+  tunnel (`bore.pub:54584` / `cdspc.duckdns.org:54585`) were all healthy
+  at the same moment `gh codespace ports` showed neither port at all. This
+  is expected, not a bug — bore opens its own outbound connection to
+  `bore.pub`, entirely separate from Codespaces' own port-forwarding, so
+  those ports never get added to that list no matter how healthy they
+  are. Don't diagnose from that list; use `port-check` (see above) or a
+  direct curl instead.
 
 - The base `mcr.microsoft.com/devcontainers/rust:1` image does **not**
   include `gh` (GitHub CLI) — confirmed 2026-08-21 that it was completely
