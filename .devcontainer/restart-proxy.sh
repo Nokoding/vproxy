@@ -6,11 +6,22 @@
 # HTTP(S) reverse-proxying at Cloudflare's edge, not raw TCP passthrough,
 # so vproxy's CONNECT/absolute-URI proxy traffic gets rejected (403).
 
+# Broad patterns (not tied to a specific port) so switching ports via
+# configure-proxy and restarting always cleans up whatever was running
+# before, even a stale process bound to a now-abandoned port.
 pkill -f 'vproxy run' 2>/dev/null
-pkill -f 'bore local 8080' 2>/dev/null
-pkill -f 'bore local 8443' 2>/dev/null
+pkill -f 'bore local' 2>/dev/null
 pkill -f 'PROXY_WATCHDOG' 2>/dev/null
 pkill -f 'ollama serve' 2>/dev/null
+# A quick-test-runner.sh from a PREVIOUS restart can still be mid-flight
+# here (its failure path alone takes 2+ minutes: 8s delay, up to 8 curls,
+# an 8s repair wait, a retest, a 45s Ollama call). Left alive, it holds
+# the port values that were exported when IT started, so if ports changed
+# in between (e.g. via configure-proxy) it silently tests/repairs against
+# the now-abandoned old ports using the pidfiles this restart just wrote
+# -- kill+respawning THIS restart's brand-new processes and emailing a
+# bogus failure report. Found 2026-08-21 during a full-repo proofread.
+pkill -f 'quick-test' 2>/dev/null
 sleep 0.5
 
 # Resolve the real script directory even when invoked through the
@@ -19,6 +30,7 @@ sleep 0.5
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 ALERT_SCRIPT="$SCRIPT_DIR/alert-email.sh"
 AI_TRIAGE_SCRIPT="$SCRIPT_DIR/ai-triage.sh"
+. "$SCRIPT_DIR/proxy-env.sh"
 export ALERT_SCRIPT AI_TRIAGE_SCRIPT
 rm -f /tmp/proxy-alert-unhealthy /tmp/proxy-alert-count /tmp/proxy-alert-lastalert
 
@@ -30,7 +42,7 @@ rm -f /tmp/proxy-alert-unhealthy /tmp/proxy-alert-count /tmp/proxy-alert-lastale
 # respawn it.
 nohup sh -c '
 while true; do
-  vproxy run --bind 0.0.0.0:8080 http >> /tmp/vproxy.log 2>&1 &
+  vproxy run --bind "0.0.0.0:$LOCAL_HTTP_PORT" http >> /tmp/vproxy.log 2>&1 &
   echo $! > /tmp/vproxy.pid
   wait $!
   sleep 1
@@ -38,7 +50,7 @@ done' > /dev/null 2>&1 &
 
 nohup sh -c '
 while true; do
-  bore local 8080 --to bore.pub --port 54584 >> /tmp/bore.log 2>&1 &
+  bore local "$LOCAL_HTTP_PORT" --to bore.pub --port "$BORE_HTTP_PORT" >> /tmp/bore.log 2>&1 &
   echo $! > /tmp/bore.pid
   wait $!
   sleep 1
@@ -51,24 +63,30 @@ done' > /dev/null 2>&1 &
 # on networks that inspect/block plain HTTP proxying but allow generic
 # HTTPS. Purely additive: if cert issuance fails for any reason, this
 # block just doesn't start and the plain HTTP proxy above is unaffected.
-TLS_CERT_DIR="$HOME/.vproxy-tls"
+export TLS_CERT_DIR="$HOME/.vproxy-tls"
 if "$SCRIPT_DIR/tls-cert.sh"; then
-  nohup sh -c "
+  nohup sh -c '
   while true; do
-    vproxy run --bind 0.0.0.0:8443 https --tls-cert '$TLS_CERT_DIR/fullchain.pem' --tls-key '$TLS_CERT_DIR/key.pem' >> /tmp/vproxy-tls.log 2>&1 &
-    echo \$! > /tmp/vproxy-tls.pid
-    wait \$!
+    vproxy run --bind "0.0.0.0:$LOCAL_TLS_PORT" https --tls-cert "$TLS_CERT_DIR/fullchain.pem" --tls-key "$TLS_CERT_DIR/key.pem" >> /tmp/vproxy-tls.log 2>&1 &
+    echo $! > /tmp/vproxy-tls.pid
+    wait $!
     sleep 1
-  done" > /dev/null 2>&1 &
+  done' > /dev/null 2>&1 &
 
   nohup sh -c '
   while true; do
-    bore local 8443 --to bore.pub --port 54585 >> /tmp/bore-tls.log 2>&1 &
+    bore local "$LOCAL_TLS_PORT" --to bore.pub --port "$BORE_TLS_PORT" >> /tmp/bore-tls.log 2>&1 &
     echo $! > /tmp/bore-tls.pid
     wait $!
     sleep 1
   done' > /dev/null 2>&1 &
 else
+  # Clear any pidfiles from a previous run's TLS variant -- left stale,
+  # they survive a stop/start and get trusted at face value by
+  # quick-test.sh (kill -0, correctly) and by port-check.sh (existence
+  # only, no kill -0 -- see port-check.sh), producing a confusing report
+  # instead of the "not running" message it's supposed to show.
+  rm -f /tmp/vproxy-tls.pid /tmp/bore-tls.pid
   echo "$(date): TLS cert unavailable, HTTPS proxy variant not started (plain HTTP still up)" >> /tmp/proxy-watchdog.log
 fi
 
@@ -104,7 +122,7 @@ done' > /dev/null 2>&1 &
 nohup sh -c '
 while true; do # PROXY_WATCHDOG
   sleep 30
-  if ! curl -s -m 5 -x http://127.0.0.1:8080 http://example.com -o /dev/null; then
+  if ! curl -s -m 5 -x "http://127.0.0.1:$LOCAL_HTTP_PORT" http://example.com -o /dev/null; then
     echo "$(date): health check timed out, restarting" >> /tmp/proxy-watchdog.log
     [ -f /tmp/vproxy.pid ] && kill -9 "$(cat /tmp/vproxy.pid)" 2>/dev/null
     [ -f /tmp/bore.pid ] && kill -9 "$(cat /tmp/bore.pid)" 2>/dev/null
@@ -147,13 +165,13 @@ while true; do # PROXY_WATCHDOG
   fi
 done' > /dev/null 2>&1 &
 
-# Re-assert ports 8080/8443 as public every time (covers first boot and
+# Re-assert both local ports as public every time (covers first boot and
 # any time Codespaces resets it) so it never has to be done by hand. Not
 # actually required for bore itself (it's an outbound tunnel, unaffected
 # by Codespaces port visibility) but kept for direct access/debugging.
 if [ -n "$CODESPACE_NAME" ]; then
-  gh codespace ports visibility 8080:public --codespace "$CODESPACE_NAME" >/dev/null 2>&1
-  gh codespace ports visibility 8443:public --codespace "$CODESPACE_NAME" >/dev/null 2>&1
+  gh codespace ports visibility "$LOCAL_HTTP_PORT:public" --codespace "$CODESPACE_NAME" >/dev/null 2>&1
+  gh codespace ports visibility "$LOCAL_TLS_PORT:public" --codespace "$CODESPACE_NAME" >/dev/null 2>&1
 fi
 
 # Keep the DuckDNS record (used for the URL-cloaking reverse proxy)
@@ -178,10 +196,13 @@ nohup sh -c "sleep 8; '$SCRIPT_DIR/quick-test-runner.sh' >> /tmp/quick-test.log 
 
 sleep 1
 echo "vproxy + bore restarted (auto-restart on crash or timeout is active)."
-echo "proxy address (http):  bore.pub:54584"
+echo "proxy address (http):  bore.pub:$BORE_HTTP_PORT"
 case "$DUCKDNS_DOMAIN" in
   *.*) DUCKDNS_FQDN="$DUCKDNS_DOMAIN" ;;
   ?*) DUCKDNS_FQDN="${DUCKDNS_DOMAIN}.duckdns.org" ;;
   *) DUCKDNS_FQDN="<DUCKDNS_DOMAIN unset>" ;;
 esac
-echo "proxy address (https): ${DUCKDNS_FQDN}:54585 (only if TLS cert issuance succeeded, see /tmp/acme.log)"
+echo "proxy address (https): ${DUCKDNS_FQDN}:$BORE_TLS_PORT (only if TLS cert issuance succeeded, see /tmp/acme.log)"
+if [ "$PROXY_CONFIG_IS_DEFAULT" = 1 ]; then
+  echo "Using default ports (local $LOCAL_HTTP_PORT/$LOCAL_TLS_PORT, public $BORE_HTTP_PORT/$BORE_TLS_PORT). Run 'configure-proxy' to customize."
+fi

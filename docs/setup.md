@@ -17,6 +17,20 @@ scoped to this repo — never put them in the code itself.
 `.duckdns.org` itself wherever the full domain is actually needed (like
 requesting the TLS certificate).
 
+## Ports (optional)
+
+Every port is also changeable — the four secrets below, or the
+`configure-proxy` command, whichever you prefer:
+
+| Secret | What it's for | Default |
+|---|---|---|
+| `LOCAL_HTTP_PORT` | Container-local port for the plain proxy | `8080` |
+| `LOCAL_TLS_PORT` | Container-local port for the TLS proxy | `8443` |
+| `BORE_HTTP_PORT` | Public bore.pub port for the plain proxy | `54584` |
+| `BORE_TLS_PORT` | Public bore.pub port for the TLS proxy | `54585` |
+
+→ **[Changing ports or the TLS domain](self-healing.md#changing-ports-or-the-tls-domain)**
+
 ## After adding secrets
 
 Stop and restart the Codespace — a new terminal in the same running
@@ -33,3 +47,5 @@ pieces, and everything else keeps working if one is missing:
 - No `DUCKDNS_*`: the secure (TLS) proxy variant won't have a stable
   hostname to issue a certificate for, so it won't start — the regular
   proxy is unaffected either way.
+- No `LOCAL_HTTP_PORT`/`LOCAL_TLS_PORT`/`BORE_HTTP_PORT`/`BORE_TLS_PORT`:
+  every port just uses its default above — nothing else is affected.

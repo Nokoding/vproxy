@@ -26,17 +26,30 @@ writing to `AGENTS.md` directly or making it a separate copy.
 
 ## What's running and why
 
-- `vproxy` (plain HTTP) on container-local `0.0.0.0:8080` → tunneled by
-  `bore` to `bore.pub:54584`. The original/simplest path, works everywhere.
-- `vproxy` (HTTPS) on container-local `0.0.0.0:8443` → tunneled by a second
-  `bore` to `bore.pub:54585`, reachable at `cdspc.duckdns.org:54585`. Added
+- `vproxy` (plain HTTP) on container-local `0.0.0.0:$LOCAL_HTTP_PORT`
+  (default `8080`) → tunneled by `bore` to `bore.pub:$BORE_HTTP_PORT`
+  (default `54584`). The original/simplest path, works everywhere.
+- `vproxy` (HTTPS) on container-local `0.0.0.0:$LOCAL_TLS_PORT` (default
+  `8443`) → tunneled by a second `bore` to `bore.pub:$BORE_TLS_PORT`
+  (default `54585`), reachable at `cdspc.duckdns.org:$BORE_TLS_PORT`. Added
   2026-08-20 so the proxy can pass as ordinary HTTPS traffic (real
   Let's Encrypt cert, normal TLS handshake) on networks that block/inspect
   plain HTTP proxying. Purely additive — if TLS cert issuance fails, only
-  this half is skipped; the plain HTTP proxy is unaffected. 8443 was picked
-  arbitrarily as a second local port, not significant beyond that.
+  this half is skipped; the plain HTTP proxy is unaffected.
+- All four ports are configurable, either via the matching Codespaces
+  secret (`LOCAL_HTTP_PORT`/`LOCAL_TLS_PORT`/`BORE_HTTP_PORT`/`BORE_TLS_PORT`)
+  or interactively via `configure-proxy` (symlinked like `restart-proxy`).
+  Added 2026-08-21. `.devcontainer/proxy-env.sh` is the single source of
+  truth for resolving them — sourced by every script that needs a port
+  value (`restart-proxy.sh`, `quick-test.sh`, `port-check.sh`,
+  `configure-proxy.sh`) — precedence: real Codespaces secret > entry saved
+  to `~/.vproxy-config` by `configure-proxy` (survives stop/start, wiped on
+  rebuild) > hardcoded default. `restart-proxy` prints a one-line reminder
+  to run `configure-proxy` for as long as nothing's ever been configured
+  (`PROXY_CONFIG_IS_DEFAULT`, set by `proxy-env.sh`). See the gotcha below
+  about a shadowing bug this design had to work around.
 - Codespaces port visibility (`gh codespace ports visibility`) is flipped to
-  public for both 8080 and 8443 on every restart. This is *not* actually
+  public for both local ports on every restart. This is *not* actually
   required for bore to work (bore makes an outbound-only connection to
   bore.pub, unaffected by Codespaces' own port-forwarding visibility —
   confirmed by testing) but is kept for direct-access/debugging convenience.
@@ -55,13 +68,14 @@ writing to `AGENTS.md` directly or making it a separate copy.
   test, bore tunnel connection status (from the log), and a real curl
   through the public tunnel. Added 2026-08-21 after confirming live that
   everything can check out fully healthy end-to-end while `gh codespace
-  ports` lists neither 8080 nor 8443 at all — see the gotcha below. Always
+  ports` lists neither local port at all — see the gotcha below. Always
   exits 0; it's a diagnostic report, not a health gate.
 - On every startup, `restart-proxy.sh` backgrounds `quick-test-runner.sh`
   (after an 8s delay) to prove the proxy can actually reach the 4 sites the
   user tests with by hand — discord.com, tiktok.com, youtube.com,
-  google.com — through both the plain (8080) and TLS (8443, if up) proxy
-  variants (`quick-test.sh` does the actual checks). All pass → email
+  google.com — through both the plain and TLS (if up) proxy variants,
+  whatever ports they're actually configured for (`quick-test.sh` does the
+  actual checks). All pass → email
   "all good" with a one-line Ollama comment. Anything fails → kill+respawn
   vproxy/bore by PID (same recovery the 30s watchdog uses), email that a
   repair was attempted, retest, and email those results too. If the retest
@@ -98,16 +112,68 @@ available in the Codespace without a manual reinstall step after a rebuild.
 ## Gotchas learned the hard way
 
 - **`gh codespace ports` (and the Codespaces "Ports" UI tab) will not list
-  8080 or 8443, ever, and that's normal.** Confirmed 2026-08-21 while
-  investigating a "the ports aren't online" report from the user: process
-  alive, port listening, local curl, and a real curl through the public
-  tunnel (`bore.pub:54584` / `cdspc.duckdns.org:54585`) were all healthy
-  at the same moment `gh codespace ports` showed neither port at all. This
-  is expected, not a bug — bore opens its own outbound connection to
-  `bore.pub`, entirely separate from Codespaces' own port-forwarding, so
-  those ports never get added to that list no matter how healthy they
-  are. Don't diagnose from that list; use `port-check` (see above) or a
-  direct curl instead.
+  either local proxy port, ever, and that's normal.** Confirmed 2026-08-21
+  while investigating a "the ports aren't online" report from the user:
+  process alive, port listening, local curl, and a real curl through the
+  public tunnel were all healthy at the same moment `gh codespace ports`
+  showed neither port at all. This is expected, not a bug — bore opens its
+  own outbound connection to `bore.pub`, entirely separate from
+  Codespaces' own port-forwarding, so those ports never get added to that
+  list no matter how healthy they are. Don't diagnose from that list; use
+  `port-check` (see above) or a direct curl instead.
+
+- **A child process inheriting an already-`export`ed port variable will
+  shadow a config file it should have re-read.** Found 2026-08-21 while
+  testing `configure-proxy`: it sources `proxy-env.sh` at the top just to
+  *display* current values, which exports e.g. `LOCAL_HTTP_PORT` into its
+  own process env with the *old* value already resolved. If the user then
+  picks option 2 (enter values now) and it calls `restart-proxy` as a
+  child process, that child inherits the stale exported value — and since
+  `proxy-env.sh`'s `${VAR:-default}` precedence can't tell "real
+  Codespaces secret" apart from "already resolved by an earlier sourcing
+  in this same process," the freshly-written `~/.vproxy-config` gets
+  silently ignored and the proxy restarts on the *old* port. Confirmed
+  live: set local ports to 9090/9443, restart bound to 8080/8443 anyway.
+  Fixed in `configure-proxy.sh` by capturing which of the four vars came
+  from a real secret *before* sourcing `proxy-env.sh` at all
+  (`${VAR:+1}` on the raw incoming env, before defaults are ever applied),
+  then `unset`-ing exactly the non-secret ones right before calling
+  `restart-proxy` so the child re-resolves cleanly from the new config
+  file. Verified live after the fix: 9090/9443 came up correctly. Worth
+  remembering for any other script that both sources `proxy-env.sh` for
+  its own display/logic AND shells out to another script that also
+  sources it.
+
+- **A full-repo proofread (2026-08-21, right after the above) found three
+  more bugs in the same new port-config code, all now fixed:**
+  1. `restart-proxy.sh`'s startup pkill list didn't match a still-running
+     `quick-test-runner.sh` from a *previous* restart (its failure path
+     alone runs 2+ minutes). Left alive across a port change, it inherits
+     the stale exported ports, tests the abandoned old ones, and
+     kill+respawns THIS restart's brand-new pidfiles while emailing a
+     bogus failure report. Fixed: `pkill -f 'quick-test'` added to the
+     startup cleanup.
+  2. `port-check.sh` judged "bore tunnel: connected" by grepping the
+     *whole* (append-only, never-truncated) `bore.log` for any
+     `"listening at bore.pub"` line ever, with no check that the bore
+     process was actually still alive — so a tunnel dead for the whole
+     session, or reassigned to a different port after a collision, still
+     read as healthy. Fixed: now also checks `bore.pid` via `kill -0`,
+     and requires the listening-line's port to match the *current*
+     `$BORE_HTTP_PORT`/`$BORE_TLS_PORT`, not just any port ever seen.
+  3. A stale `/tmp/vproxy-tls.pid`/`/tmp/bore-tls.pid` (left behind
+     whenever TLS cert issuance fails, since nothing cleared them —
+     they survive a stop/start) made `port-check.sh`'s "TLS proxy: not
+     running" branch unreachable, since it only checked file-existence,
+     not `kill -0` like `quick-test.sh` does. Fixed both: `restart-proxy.sh`
+     now `rm -f`s them on cert failure, and `port-check.sh`'s gate now
+     matches `quick-test.sh`'s (`kill -0`, not just `[ -f ]`).
+
+  Also hardened `configure-proxy.sh`'s port entry, which previously
+  accepted any positive number (e.g. 70000, or the same port twice) with
+  no upper-bound or duplicate check — now rejects >65535 and rejects
+  `LOCAL_HTTP_PORT`/`LOCAL_TLS_PORT` or `BORE_HTTP_PORT`/`BORE_TLS_PORT`
+  being equal to each other.
 
 - The base `mcr.microsoft.com/devcontainers/rust:1` image does **not**
   include `gh` (GitHub CLI) — confirmed 2026-08-21 that it was completely
@@ -131,7 +197,7 @@ available in the Codespace without a manual reinstall step after a rebuild.
   TLS handshake first, so nothing loads — this looked like a broken setup
   but was actually just an iOS platform limitation; the server side worked
   fine (verified via curl before the user tested on-device). On iPad, use
-  the plain proxy (`bore.pub:54584`) instead. Reaching the TLS variant from
+  the plain proxy instead. Reaching the TLS variant from
   iOS would need a third-party proxy app exposing an explicit "https" proxy
   type (Shadowrocket, Quantumult X, Surge), not the native Settings app.
 
@@ -159,9 +225,20 @@ Set via Settings → Codespaces secrets, scoped to this repo:
 - `MAILERSEND_API_TOKEN`, `MAILERSEND_FROM` — email alerts
 - `DUCKDNS_TOKEN`, `DUCKDNS_DOMAIN` — DNS record + TLS cert DNS-01 challenge
 
+Optional, all have working defaults if unset (see "What's running and
+why" above) — `LOCAL_HTTP_PORT`, `LOCAL_TLS_PORT`, `BORE_HTTP_PORT`,
+`BORE_TLS_PORT`. Easiest set via `configure-proxy` rather than by hand.
+
 ## Loose ends / not yet wired up
 
 - `serve-pac.sh` (repo root) references `RAILWAY_TCP_PROXY_DOMAIN` /
   `RAILWAY_TCP_PROXY_PORT`, which aren't set in the Codespace env — looks
   like a leftover from an earlier Railway-based approach before the switch
-  to bore.pub. Not currently invoked by anything in `.devcontainer/`.
+  to bore.pub. Not invoked by anything in `.devcontainer/` (the Codespace
+  path this fork actually uses), but it IS still invoked by `Dockerfile`
+  (`COPY serve-pac.sh` + run in `ENTRYPOINT`, alongside vproxy on 8090) —
+  `Dockerfile` was hand-edited by this fork (commit `ace43f3`) and is the
+  one non-`.devcontainer` file outside the Rust source that was. With both
+  Railway vars unset it just serves a valid-but-useless PAC (`return
+  "PROXY :";`). Only reachable if something actually builds/runs this
+  Dockerfile, which nothing in the Codespace flow does.

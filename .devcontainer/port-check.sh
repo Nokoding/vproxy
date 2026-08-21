@@ -1,17 +1,21 @@
 #!/bin/sh
-# On-demand deep check of the local proxy ports (8080 plain, 8443 TLS),
-# for troubleshooting -- separate from quick-test.sh's "can it reach real
-# sites" check, this looks one layer lower: is the process actually alive,
-# is the port actually listening, and is the bore tunnel actually
-# connected. Written because Codespaces' own port-forwarding list (the
-# "Ports" tab in the UI, or `gh codespace ports`) does NOT need to include
-# 8080/8443 for the proxy to work -- bore's tunnel is a separate outbound
-# connection, unrelated to Codespaces port visibility (see CLAUDE.md) --
-# but that makes those ports look "offline" from that view, which is a
-# recurring source of confusion. This makes the real state explicit.
+# On-demand deep check of the local proxy ports (plain + TLS, whatever
+# they're currently configured to), for troubleshooting -- separate from
+# quick-test.sh's "can it reach real sites" check, this looks one layer
+# lower: is the process actually alive, is the port actually listening,
+# and is the bore tunnel actually connected. Written because Codespaces'
+# own port-forwarding list (the "Ports" tab in the UI, or `gh codespace
+# ports`) does NOT need to include either local port for the proxy to
+# work -- bore's tunnel is a separate outbound connection, unrelated to
+# Codespaces port visibility (see CLAUDE.md) -- but that makes those ports
+# look "offline" from that view, which is a recurring source of
+# confusion. This makes the real state explicit.
 #
 # Usage: port-check.sh  (no args, prints a report, always exits 0 --
 # this is a diagnostic tool, not a health gate)
+
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+. "$SCRIPT_DIR/proxy-env.sh"
 
 is_listening() {
   # $1 = port
@@ -26,7 +30,7 @@ is_listening() {
 }
 
 check_stack() {
-  label="$1" pidfile="$2" port="$3" scheme="$4" borelog="$5" pubhost="$6" pubport="$7"
+  label="$1" pidfile="$2" port="$3" scheme="$4" borepidfile="$5" borelog="$6" pubhost="$7" pubport="$8"
 
   echo "$label (local port $port):"
 
@@ -48,10 +52,22 @@ check_stack() {
     *) echo "  local curl:     FAIL (${local_code:-no response})" ;;
   esac
 
-  if [ -f "$borelog" ] && grep -q "listening at bore.pub" "$borelog" 2>/dev/null; then
-    echo "  bore tunnel:    connected ($(grep "listening at bore.pub" "$borelog" | tail -1 | grep -oE 'bore\.pub:[0-9]+'))"
+  # bore.log is append-only across every restart-proxy run this session,
+  # so an old "listening at bore.pub:<port>" line never goes away on its
+  # own -- matching anywhere in the file would still claim "connected"
+  # for a tunnel that died an hour ago, or report a port nothing is using
+  # after a port change where bore failed to grab the new one. Require
+  # BOTH a live bore process (its own pidfile, not just vproxy's) AND a
+  # "listening" line for the port we're actually configured for right now.
+  if [ -f "$borepidfile" ] && kill -0 "$(cat "$borepidfile")" 2>/dev/null && grep -q "listening at bore.pub:$pubport" "$borelog" 2>/dev/null; then
+    echo "  bore tunnel:    connected (bore.pub:$pubport)"
   else
-    echo "  bore tunnel:    no 'listening' line found in $borelog"
+    if [ -f "$borepidfile" ] && kill -0 "$(cat "$borepidfile")" 2>/dev/null; then
+      bore_proc_state="process alive"
+    else
+      bore_proc_state="no live process"
+    fi
+    echo "  bore tunnel:    NOT connected ($bore_proc_state; no 'listening at bore.pub:$pubport' line in $borelog)"
   fi
 
   pub_code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 -x "$scheme://$pubhost:$pubport" --proxy-insecure http://example.com 2>/dev/null)
@@ -68,16 +84,21 @@ case "$DUCKDNS_DOMAIN" in
   *) DUCKDNS_FQDN="" ;;
 esac
 
-check_stack "plain proxy" /tmp/vproxy.pid 8080 http /tmp/bore.log bore.pub 54584
+check_stack "plain proxy" /tmp/vproxy.pid "$LOCAL_HTTP_PORT" http /tmp/bore.pid /tmp/bore.log bore.pub "$BORE_HTTP_PORT"
 
-if [ -f /tmp/vproxy-tls.pid ]; then
-  check_stack "TLS proxy" /tmp/vproxy-tls.pid 8443 https /tmp/bore-tls.log "${DUCKDNS_FQDN:-bore.pub}" 54585
+# kill -0, not just [ -f ] -- a stale pidfile from a previous run whose
+# TLS cert issuance failed survives a stop/start (restart-proxy now
+# cleans this up going forward, but an old one may already be sitting
+# there) and would otherwise fall through to check_stack and print four
+# confusing FAILs instead of this "not running" message.
+if [ -f /tmp/vproxy-tls.pid ] && kill -0 "$(cat /tmp/vproxy-tls.pid)" 2>/dev/null; then
+  check_stack "TLS proxy" /tmp/vproxy-tls.pid "$LOCAL_TLS_PORT" https /tmp/bore-tls.pid /tmp/bore-tls.log "${DUCKDNS_FQDN:-bore.pub}" "$BORE_TLS_PORT"
 else
-  echo "TLS proxy (local port 8443): not running (no pid file -- cert issuance likely failed, see /tmp/acme.log)"
+  echo "TLS proxy (local port $LOCAL_TLS_PORT): not running (no live pid -- cert issuance likely failed, see /tmp/acme.log)"
   echo
 fi
 
 echo "Note: Codespaces' own port-forwarding list (Ports tab / \`gh codespace"
-echo "ports\`) does NOT need to show 8080 or 8443 -- bore's tunnel is a"
+echo "ports\`) does NOT need to show either local port -- bore's tunnel is a"
 echo "separate outbound connection and doesn't depend on Codespaces port"
 echo "visibility. Use the checks above, not that list, to judge health."

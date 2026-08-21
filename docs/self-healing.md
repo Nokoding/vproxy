@@ -5,8 +5,9 @@
 A small set of processes, watching itself:
 
 - **vproxy** — the proxy itself, running twice: a regular (plain HTTP,
-  port 8080 → `bore.pub:54584`) and a secure (TLS, port 8443 →
-  `cdspc.duckdns.org:54585`) instance.
+  default port 8080 → `bore.pub:54584`) and a secure (TLS, default port
+  8443 → `cdspc.duckdns.org:54585`) instance. Every one of those ports is
+  changeable — see **Changing ports or the TLS domain** below.
 - **bore** — the outbound tunnel that makes each vproxy instance reachable
   from the internet, also running twice (one per vproxy instance).
 - **A watchdog** — every 30 seconds, sends a real request through the
@@ -66,6 +67,29 @@ tail -f /tmp/ollama.log            # the local AI
 tail -f /tmp/acme.log              # the secure certificate
 ```
 
+## Changing ports or the TLS domain
+
+Every port here is configurable — the local container ports, and the
+public bore.pub ports your device actually connects to:
+
+```bash
+configure-proxy
+```
+
+It shows the current effective values and offers two ways to change them:
+
+1. **Codespaces secrets** (`LOCAL_HTTP_PORT`, `LOCAL_TLS_PORT`,
+   `BORE_HTTP_PORT`, `BORE_TLS_PORT`) — survives a full Codespace rebuild,
+   not just a stop/start. Requires a Codespace restart to take effect,
+   same as the other secrets (see `docs/setup.md`).
+2. **Enter values right there in the terminal** — takes effect
+   immediately (it offers to run `restart-proxy` for you), but is wiped
+   on a rebuild unless you also add secrets for it.
+
+A real Codespaces secret always wins over a value entered through option
+2. `restart-proxy` prints a reminder to run `configure-proxy` any time
+you're still on the defaults.
+
 ## Checking port health directly
 
 If something seems down, `port-check` gives a direct read on both proxy
@@ -77,8 +101,8 @@ port-check
 ```
 
 **Important:** the Codespaces "Ports" tab (and `gh codespace ports`) does
-**not** need to list 8080 or 8443 for the proxy to be working. bore opens
-its own outbound connection to `bore.pub`, completely separate from
+**not** need to list either local port for the proxy to be working. bore
+opens its own outbound connection to `bore.pub`, completely separate from
 Codespaces' own port-forwarding — so those ports showing as absent/offline
 there is normal, not a sign of a problem. `port-check` is the accurate
 signal; the Ports tab isn't.

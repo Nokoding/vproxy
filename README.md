@@ -30,7 +30,10 @@ Point your device's proxy settings here:
 | Regular | `bore.pub` | `54584` |
 | Secure (TLS) | `cdspc.duckdns.org` | `54585` |
 
-No username or password needed.
+No username or password needed. These are just this fork's current
+values — every port here is yours to change (`configure-proxy`).
+
+→ **[Changing ports or the TLS domain](docs/self-healing.md#changing-ports-or-the-tls-domain)**
 
 Use the secure one if your device supports it — it looks like ordinary
 encrypted web traffic to anything watching the network. One catch:
