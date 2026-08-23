@@ -91,6 +91,21 @@ writing to `AGENTS.md` directly or making it a separate copy.
 - The DuckDNS A record is repointed at bore.pub's current IP on every
   restart, both so `cdspc.duckdns.org` resolves to the tunnel and (as of
   the TLS work) so the domain is stable enough for cert issuance/renewal.
+- `keepalive.sh` stops the Codespace from auto-stopping after 30 min idle.
+  Added 2026-08-23. Confirmed by testing that GitHub's idle timer only
+  resets on real terminal I/O (input or output on the connected
+  terminal), not on a silent background process, and that
+  `idle_timeout_minutes` can't be changed after creation — a `PATCH
+  /user/codespaces/{name}` with the auto-injected `GITHUB_TOKEN` silently
+  no-ops, and `gh codespace edit` has no `--idle-timeout` flag (only
+  `codespace create` takes one). So instead, every 20 min it writes a
+  cursor save/restore escape sequence (`\0337\0338`, no visible effect,
+  no beep) to every attached pty under `/dev/pts/` — cheap enough to
+  register as terminal output without ever appearing on screen. No-ops
+  outside a Codespace (`$CODESPACES` unset). Started by `restart-proxy.sh`
+  alongside the proxy processes, killed/respawned the same way
+  (`pkill -f 'keepalive.sh'` on startup) — otherwise unrelated to the
+  proxy itself, just piggybacking on the same lifecycle hook.
 
 ## Everything is ephemeral except git + Codespaces secrets
 

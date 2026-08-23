@@ -23,6 +23,10 @@ A small set of processes, watching itself:
 - **A startup self-test** — see below.
 - **Email alerts** — sent via MailerSend, only when the AI (or the
   fallback rule) decides you should know.
+- **A keepalive** — quietly pokes the Codespace's terminal every 20
+  minutes so GitHub's 30-minute idle auto-stop never kicks in. It has
+  nothing to do with the proxy's own health; it just rides along on the
+  same startup/restart lifecycle.
 
 Every one of the above respawns automatically if it crashes or the
 Codespace itself restarts. Nothing here needs manual intervention — but if

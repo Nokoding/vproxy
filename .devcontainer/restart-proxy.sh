@@ -12,6 +12,7 @@
 pkill -f 'vproxy run' 2>/dev/null
 pkill -f 'bore local' 2>/dev/null
 pkill -f 'PROXY_WATCHDOG' 2>/dev/null
+pkill -f 'keepalive.sh' 2>/dev/null
 pkill -f 'ollama serve' 2>/dev/null
 # A quick-test-runner.sh from a PREVIOUS restart can still be mid-flight
 # here (its failure path alone takes 2+ minutes: 8s delay, up to 8 curls,
@@ -33,6 +34,10 @@ AI_TRIAGE_SCRIPT="$SCRIPT_DIR/ai-triage.sh"
 . "$SCRIPT_DIR/proxy-env.sh"
 export ALERT_SCRIPT AI_TRIAGE_SCRIPT
 rm -f /tmp/proxy-alert-unhealthy /tmp/proxy-alert-count /tmp/proxy-alert-lastalert
+
+# Keeps the Codespace from auto-stopping after 30 min idle -- unrelated
+# to the proxy itself, just piggybacking on this script's startup.
+nohup "$SCRIPT_DIR/keepalive.sh" >/dev/null 2>&1 &
 
 # vproxy and bore both respawn immediately if they crash/exit. Each
 # iteration records the real binary's PID (not the loop's own PID) to a
