@@ -27,3 +27,8 @@ Cargo.lock
 scripts/
 *.py
 .venv/
+
+# This fork's own -- the blanket *.py above predates it (unrelated
+# Python tooling ignore) and would otherwise silently exclude it from
+# every commit, so it'd vanish for anyone who forks/rebuilds this repo.
+!.devcontainer/pac-server.py

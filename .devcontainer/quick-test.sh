@@ -16,7 +16,11 @@ SITES="discord.com tiktok.com youtube.com google.com"
 # $1 = curl -x proxy arg, $2 = extra curl flags (may be empty), $3 = site,
 # $4 = label for the output line.
 check() {
-  code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 -x "$1" $2 "https://$3" 2>/dev/null)
+  if [ "$PROXY_AUTH_ENABLED" = "1" ]; then
+    code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 -x "$1" -U "$PROXY_USERNAME:$PROXY_PASSWORD" $2 "https://$3" 2>/dev/null)
+  else
+    code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 -x "$1" $2 "https://$3" 2>/dev/null)
+  fi
   case "$code" in
     2??|3??) echo "$4 $3: OK ($code)"; return 0 ;;
     *) echo "$4 $3: FAIL (${code:-no response})"; return 1 ;;

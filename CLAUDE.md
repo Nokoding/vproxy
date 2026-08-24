@@ -3,9 +3,9 @@
 This is a fork of upstream `vproxy` repurposed as a free, self-healing
 personal proxy running inside a GitHub Codespace. The upstream project
 (HTTP/HTTPS/SOCKS5 proxy server) is basically untouched; everything specific
-to this fork lives in `.devcontainer/`. `README.md` (plus `docs/setup.md`
-and `docs/self-healing.md`, which it links out to) is the user-facing
-writeup — this file is the running internal context, kept up to date after
+to this fork lives in `.devcontainer/`. `README.md` (plus the `docs/`
+pages it links out to) is the user-facing writeup — this file is the
+running internal context, kept up to date after
 every change so a future session (including after a Codespace rebuild,
 which wipes the container but not git or Codespaces secrets) doesn't have
 to re-derive it from commit history.
@@ -17,6 +17,27 @@ just append — fold new facts into the relevant section, and remove
 anything that's no longer true. If a change also affects what a user
 forking this repo needs to know, update `README.md` and the relevant
 `docs/*.md` page too, not just this file.
+
+The user-facing docs are split one-topic-per-file, and each fact should
+have exactly one home (cross-link from elsewhere rather than explaining
+it twice):
+
+- `README.md` — entry point only: what this is, how it works at a
+  glance, the connect table, get-started steps, the three commands, and
+  links out. Keep the Codespaces badge near the top and the upstream
+  "Built on" attribution at the bottom; both are load-bearing.
+- `docs/setup.md` — the four required Codespaces secrets
+  (`MAILERSEND_*`, `DUCKDNS_*`): what each is for, where to get it, the
+  restart-required note, and what degrades if one is missing.
+- `docs/configuration.md` — everything optional/tunable: the
+  `configure-proxy` command and its secret > config-file > default
+  precedence, the six ports, the TLS domain, auth, the `.pac` URL, and
+  `PROXY_MODE`.
+- `docs/self-healing.md` — the reliability machinery only: the process
+  stack, the 30s watchdog, the Ollama triage + fixed fallback rule, the
+  startup self-test, `port-check` (anchor `#port-check`), and the logs.
+  Configuration topics do not belong here — that was the structural
+  problem the 2026-08-24 docs rewrite fixed.
 
 `AGENTS.md` is a symlink to this file, so any AI coding tool that looks for
 the generic `AGENTS.md` convention (not just Claude Code) gets this same
@@ -47,20 +68,83 @@ considering the change complete; use judgment on PLAUSIBLE findings.
   Let's Encrypt cert, normal TLS handshake) on networks that block/inspect
   plain HTTP proxying. Purely additive — if TLS cert issuance fails, only
   this half is skipped; the plain HTTP proxy is unaffected.
-- All four ports (and, as of 2026-08-24, `PROXY_MODE`) are configurable,
-  either via the matching Codespaces secret
-  (`LOCAL_HTTP_PORT`/`LOCAL_TLS_PORT`/`BORE_HTTP_PORT`/`BORE_TLS_PORT`/`PROXY_MODE`)
+- A `.pac` (Proxy Auto-Config) file, added 2026-08-24, so a device can be
+  pointed at one URL instead of entering host/port by hand:
+  `http://bore.pub:$BORE_PAC_PORT/proxy.pac` (default `54586`), served by
+  `.devcontainer/pac-server.py` (stdlib-only `http.server`, no deps) on
+  container-local `0.0.0.0:$LOCAL_PAC_PORT` (default `8090`) → a third
+  `bore` tunnel, same respawn-loop-with-pidfile pattern as vproxy/bore
+  above. `restart-proxy.sh` regenerates `/tmp/vproxy-pac/proxy.pac`
+  (`FindProxyForURL` returning `PROXY bore.pub:$BORE_HTTP_PORT`) on every
+  restart from the *requested* `BORE_HTTP_PORT` — same "not
+  confirmed-granted" caveat as the printed proxy addresses below, if
+  bore.pub fell back to a random port this is stale until the next
+  restart. `pac-server.py` re-reads the file from disk per-request rather
+  than needing its own restart to pick up a regeneration. Not a Rust
+  proxy protocol port and can't carry credentials (PAC has no syntax for
+  that) — the repo-root `serve-pac.sh` is a separate, older, unrelated
+  Railway-era leftover (see "Loose ends" below), not this. Started
+  *before* the TLS cert block, not after (acme.sh's DNS-01 flow sleeps
+  ~120s per issuance with no timeout, which would otherwise leave the PAC
+  endpoint down for minutes on every rebuild). `Handler.timeout = 10` +
+  `ThreadingHTTPServer` (not plain `HTTPServer`) so one client that
+  connects on this public port and never sends anything can't wedge the
+  whole endpoint. `python3` is an explicit `onCreateCommand` apt dep, not
+  just assumed present — see the `gh`/`jq` gotcha this repo already hit
+  once for why that assumption is worth avoiding.
+- Proxy authentication, added 2026-08-24 in response to discovering the
+  proxy was a de-facto open proxy (see the gotcha below on how that was
+  found). Presence-based, same idiom as `MAILERSEND_*`/`DUCKDNS_*`
+  elsewhere in this file gating an optional feature: setting **both**
+  `PROXY_USERNAME` and `PROXY_PASSWORD` turns auth on (`vproxy` itself
+  already supported `--username`/`--password`, just wasn't being passed
+  them); either missing means off, matching `vproxy`'s own
+  `requires` relationship between the two flags. `proxy-env.sh` computes
+  `PROXY_AUTH_ENABLED=1/0` from their presence; `restart-proxy.sh`'s two
+  `vproxy run` invocations add the flags conditionally. `quick-test.sh`,
+  `port-check.sh`, AND the `PROXY_WATCHDOG` health-check loop all
+  self-authenticate too (`-U user:pass`) when enabled — the watchdog case
+  was a real bug an Opus review caught: vproxy answers an
+  unauthenticated request with a `407`, and `curl` exits `0` on a `407`
+  (it's not a connection failure), so the un-authenticated watchdog would
+  have silently stopped ever detecting a real hang/outage the moment auth
+  was turned on, without erroring or logging anything. Off by default —
+  an existing fork keeps working exactly as before until someone opts in.
+  Exactly one of the two set (not both) logs a warning and runs open
+  rather than failing closed or staying silent — almost always a typo
+  (misspelled secret name), and silently open is the worst version of
+  that mistake to not hear about. `configure-proxy`'s interactive flow
+  prompts for both (password entry has terminal echo disabled, restored
+  on Ctrl-C too) via `IFS= read -r` (plain `read` would silently eat a
+  literal `\` and trim whitespace, both caught live by the same Opus
+  review), rejects any value containing `"`, `` ` ``, `$`, `\`, `{`, or
+  `}` (the `{`/`}` were a review-caught gap — spliced unescaped into a
+  `${VAR:-word}` config-file line, either one would truncate the stored
+  value with no syntax error to notice by), defaults an empty/Enter
+  answer to the *current* auth state rather than "off" (another
+  review-caught bug — silently stripped auth from an already-configured
+  proxy the first time someone ran `configure-proxy` just to change an
+  unrelated port), and `chmod 600`s `~/.vproxy-config` once it's
+  answering "yes" (it now holds a plaintext password, unlike when it only
+  held port numbers).
+- All six ports (four proxy + two PAC) and `PROXY_MODE`/auth are
+  configurable, either via the matching Codespaces secret
+  (`LOCAL_HTTP_PORT`/`LOCAL_TLS_PORT`/`BORE_HTTP_PORT`/`BORE_TLS_PORT`/`LOCAL_PAC_PORT`/`BORE_PAC_PORT`/`PROXY_MODE`/`PROXY_USERNAME`/`PROXY_PASSWORD`)
   or interactively via `configure-proxy` (symlinked like `restart-proxy`).
-  Added 2026-08-21. `.devcontainer/proxy-env.sh` is the single source of
-  truth for resolving them — sourced by every script that needs a port
-  value (`restart-proxy.sh`, `quick-test.sh`, `port-check.sh`,
-  `configure-proxy.sh`, and now `quick-test-runner.sh` too, for
-  `PROXY_MODE`) — precedence: real Codespaces secret > entry saved
-  to `~/.vproxy-config` by `configure-proxy` (survives stop/start, wiped on
-  rebuild) > hardcoded default. `restart-proxy` prints a one-line reminder
-  to run `configure-proxy` for as long as nothing's ever been configured
-  (`PROXY_CONFIG_IS_DEFAULT`, set by `proxy-env.sh`). See the gotcha below
-  about a shadowing bug this design had to work around.
+  Added 2026-08-21, extended 2026-08-24 for PAC ports + auth.
+  `.devcontainer/proxy-env.sh` is the single source of truth for
+  resolving them — sourced by every script that needs one
+  (`restart-proxy.sh`, `quick-test.sh`, `port-check.sh`,
+  `configure-proxy.sh`, `quick-test-runner.sh`) — precedence: real
+  Codespaces secret > entry saved to `~/.vproxy-config` by
+  `configure-proxy` (survives stop/start, wiped on rebuild) > hardcoded
+  default (auth has no default — presence-based, see above).
+  `restart-proxy` prints a one-line reminder to run `configure-proxy` for
+  as long as nothing's ever been configured (`PROXY_CONFIG_IS_DEFAULT`,
+  set by `proxy-env.sh` from the 6 ports only — auth being unset is the
+  normal, unremarkable default, not worth nagging about). See the gotcha
+  below about a shadowing bug this design had to work around, now
+  extended to 9 vars total.
 - Codespaces port visibility (`gh codespace ports visibility`) is flipped to
   public for both local ports on every restart. This is *not* actually
   required for bore to work (bore makes an outbound-only connection to
@@ -194,10 +278,12 @@ available in the Codespace without a manual reinstall step after a rebuild.
   then `unset`-ing exactly the non-secret ones right before calling
   `restart-proxy` so the child re-resolves cleanly from the new config
   file. `PROXY_MODE` (added 2026-08-24) follows the exact same
-  capture/unset pattern as a fifth var. Verified live after the fix: 9090/9443 came up correctly. Worth
-  remembering for any other script that both sources `proxy-env.sh` for
-  its own display/logic AND shells out to another script that also
-  sources it.
+  capture/unset pattern as a fifth var, and the PAC ports + auth vars
+  (also 2026-08-24) extend it to nine (`LOCAL_PAC_PORT`, `BORE_PAC_PORT`,
+  `PROXY_USERNAME`, `PROXY_PASSWORD`). Verified live after the fix:
+  9090/9443 came up correctly. Worth remembering for any other script
+  that both sources `proxy-env.sh` for its own display/logic AND shells
+  out to another script that also sources it.
 
 - **A full-repo proofread (2026-08-21, right after the above) found three
   more bugs in the same new port-config code, all now fixed:**
@@ -226,9 +312,10 @@ available in the Codespace without a manual reinstall step after a rebuild.
 
   Also hardened `configure-proxy.sh`'s port entry, which previously
   accepted any positive number (e.g. 70000, or the same port twice) with
-  no upper-bound or duplicate check — now rejects >65535 and rejects
-  `LOCAL_HTTP_PORT`/`LOCAL_TLS_PORT` or `BORE_HTTP_PORT`/`BORE_TLS_PORT`
-  being equal to each other.
+  no upper-bound or duplicate check — now rejects >65535 and rejects any
+  duplicate among the (now three, since the 2026-08-24 PAC addition)
+  local ports or among the three public ports, pairwise via a loop
+  rather than a single equality check per pair.
 
 - The base `mcr.microsoft.com/devcontainers/rust:1` image does **not**
   include `gh` (GitHub CLI) — confirmed 2026-08-21 that it was completely
@@ -273,6 +360,28 @@ available in the Codespace without a manual reinstall step after a rebuild.
 - acme.sh's default CA is ZeroSSL (requires EAB registration) unless you
   pass `--server letsencrypt` explicitly — `tls-cert.sh` does this.
 
+- **This proxy was a de-facto open proxy until 2026-08-24, and it was
+  found by accident.** While diagnosing an unrelated "some sites work,
+  others don't" report, `vproxy.log` showed live traffic to
+  `sch-28554.school.mosyle.io` and `gateway.icloud.com` — Apple/school-MDM
+  domains the user confirmed weren't from their device. `vproxy run` was
+  never being passed `--username`/`--password` (it supports both, see
+  `AuthMode` in `src/main.rs`), and `bore.pub:$BORE_HTTP_PORT` is a public
+  port on a public relay — trivially found by anyone scanning or
+  stumbling on it. A stranger's concurrent, uncontrolled usage competing
+  for bore.pub's own limited connection capacity (already documented
+  above as fragile under load) is a very plausible explanation for
+  "some sites work, others don't" independent of anything actually being
+  broken. Fixed by adding optional auth (see above) — off by default, so
+  check `port-check`'s "Auth:" line if this symptom ever recurs.
+- A blanket `*.py` rule already existed in `.gitignore` (predates this
+  fork, presumably for some unrelated Python tooling) and was silently
+  excluding the new `.devcontainer/pac-server.py` from every commit —
+  caught only because `git status` after writing it showed nothing.
+  Fixed with a `!.devcontainer/pac-server.py` negation line. Worth
+  `git status`-checking any new file this repo adds, not just editing it
+  and assuming `git add` will pick it up.
+
 ## Required Codespaces secrets
 
 Set via Settings → Codespaces secrets, scoped to this repo:
@@ -282,8 +391,12 @@ Set via Settings → Codespaces secrets, scoped to this repo:
 
 Optional, all have working defaults if unset (see "What's running and
 why" above) — `LOCAL_HTTP_PORT`, `LOCAL_TLS_PORT`, `BORE_HTTP_PORT`,
-`BORE_TLS_PORT`, `PROXY_MODE`. Easiest set via `configure-proxy` rather
-than by hand.
+`BORE_TLS_PORT`, `LOCAL_PAC_PORT`, `BORE_PAC_PORT`, `PROXY_MODE`. Easiest
+set via `configure-proxy` rather than by hand.
+
+`PROXY_USERNAME`/`PROXY_PASSWORD` — optional, no default (unset = proxy
+auth off, the same as before 2026-08-24). Set **both** to require a
+username/password to use this proxy. Easiest set via `configure-proxy`.
 
 ## Loose ends / not yet wired up
 
@@ -297,4 +410,8 @@ than by hand.
   one non-`.devcontainer` file outside the Rust source that was. With both
   Railway vars unset it just serves a valid-but-useless PAC (`return
   "PROXY :";`). Only reachable if something actually builds/runs this
-  Dockerfile, which nothing in the Codespace flow does.
+  Dockerfile, which nothing in the Codespace flow does. Unrelated to (and
+  not touched by) the real `.pac` file added 2026-08-24 — see
+  `.devcontainer/pac-server.py` in "What's running and why" above. Pure
+  coincidence that both happen to default to port 8090; they never run in
+  the same context so it isn't a real collision.

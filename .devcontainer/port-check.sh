@@ -46,7 +46,11 @@ check_stack() {
     echo "  listening:      NO -- nothing is bound to this port"
   fi
 
-  local_code=$(curl -s -o /dev/null -w '%{http_code}' -m 5 -x "$scheme://127.0.0.1:$port" --proxy-insecure http://example.com 2>/dev/null)
+  if [ "$PROXY_AUTH_ENABLED" = "1" ]; then
+    local_code=$(curl -s -o /dev/null -w '%{http_code}' -m 5 -x "$scheme://127.0.0.1:$port" -U "$PROXY_USERNAME:$PROXY_PASSWORD" --proxy-insecure http://example.com 2>/dev/null)
+  else
+    local_code=$(curl -s -o /dev/null -w '%{http_code}' -m 5 -x "$scheme://127.0.0.1:$port" --proxy-insecure http://example.com 2>/dev/null)
+  fi
   case "$local_code" in
     2??|3??) echo "  local curl:     OK ($local_code)" ;;
     *) echo "  local curl:     FAIL (${local_code:-no response})" ;;
@@ -70,7 +74,11 @@ check_stack() {
     echo "  bore tunnel:    NOT connected ($bore_proc_state; no 'listening at bore.pub:$pubport' line in $borelog)"
   fi
 
-  pub_code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 -x "$scheme://$pubhost:$pubport" --proxy-insecure http://example.com 2>/dev/null)
+  if [ "$PROXY_AUTH_ENABLED" = "1" ]; then
+    pub_code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 -x "$scheme://$pubhost:$pubport" -U "$PROXY_USERNAME:$PROXY_PASSWORD" --proxy-insecure http://example.com 2>/dev/null)
+  else
+    pub_code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 -x "$scheme://$pubhost:$pubport" --proxy-insecure http://example.com 2>/dev/null)
+  fi
   case "$pub_code" in
     2??|3??) echo "  public curl:    OK ($pub_code) via $pubhost:$pubport" ;;
     *) echo "  public curl:    FAIL (${pub_code:-no response}) via $pubhost:$pubport" ;;
@@ -95,6 +103,11 @@ else
   ollama_state="not running (fixed fallback throttle rule, no routine test emails; self-healing still active)"
 fi
 echo "Mode: $PROXY_MODE (configured) -- Ollama: $ollama_state"
+if [ "$PROXY_AUTH_ENABLED" = "1" ]; then
+  echo "Auth: ON (username: $PROXY_USERNAME)"
+else
+  echo "Auth: OFF -- this proxy is open to anyone who finds the address"
+fi
 echo
 
 check_stack "plain proxy" /tmp/vproxy.pid "$LOCAL_HTTP_PORT" http /tmp/bore.pid /tmp/bore.log bore.pub "$BORE_HTTP_PORT"
@@ -110,6 +123,53 @@ else
   echo "TLS proxy (local port $LOCAL_TLS_PORT): not running (no live pid -- cert issuance likely failed, see /tmp/acme.log)"
   echo
 fi
+
+# PAC server isn't a proxy (nothing to hand -x to), so it gets its own
+# simpler check rather than reusing check_stack -- but the public-fetch
+# check still needs the same bore-tunnel-staleness guard check_stack uses
+# above (kill -0 on bore-pac's own pidfile AND a "listening" line for the
+# port we're actually configured for right now, not just any port ever
+# seen in the append-only log -- see the comment on check_stack). It also
+# needs to check the *content*, not just that something PAC-shaped came
+# back: a bore.pub fallback to a different public port (e.g. because
+# $BORE_HTTP_PORT was already taken) would still serve a syntactically
+# valid PAC file that sends every client to the wrong port -- matching
+# the same "requested, not confirmed-granted" caveat noted in
+# restart-proxy.sh where this file gets generated.
+expected_pac_line="PROXY bore.pub:$BORE_HTTP_PORT"
+echo "PAC server (local port $LOCAL_PAC_PORT):"
+if [ -f /tmp/pac-server.pid ] && kill -0 "$(cat /tmp/pac-server.pid)" 2>/dev/null; then
+  echo "  process:        running (pid $(cat /tmp/pac-server.pid))"
+else
+  echo "  process:        NOT RUNNING (no live pid in /tmp/pac-server.pid)"
+fi
+if is_listening "$LOCAL_PAC_PORT"; then
+  echo "  listening:      yes (0.0.0.0:$LOCAL_PAC_PORT)"
+else
+  echo "  listening:      NO -- nothing is bound to this port"
+fi
+local_pac=$(curl -s -m 5 "http://127.0.0.1:$LOCAL_PAC_PORT/proxy.pac" 2>/dev/null)
+case "$local_pac" in
+  *"$expected_pac_line"*) echo "  local fetch:    OK (advertises $expected_pac_line)" ;;
+  *FindProxyForURL*) echo "  local fetch:    STALE (served a PAC, but not advertising $expected_pac_line -- check /tmp/vproxy-pac/proxy.pac)" ;;
+  *) echo "  local fetch:    FAIL (empty or unexpected response)" ;;
+esac
+if [ -f /tmp/bore-pac.pid ] && kill -0 "$(cat /tmp/bore-pac.pid)" 2>/dev/null && grep -q "listening at bore.pub:$BORE_PAC_PORT" /tmp/bore-pac.log 2>/dev/null; then
+  pub_pac=$(curl -s -m 10 "http://bore.pub:$BORE_PAC_PORT/proxy.pac" 2>/dev/null)
+  case "$pub_pac" in
+    *"$expected_pac_line"*) echo "  bore tunnel:    connected (bore.pub:$BORE_PAC_PORT)" ;;
+    *FindProxyForURL*) echo "  bore tunnel:    connected (bore.pub:$BORE_PAC_PORT), but STALE content -- not advertising $expected_pac_line" ;;
+    *) echo "  bore tunnel:    connected (bore.pub:$BORE_PAC_PORT), but public fetch FAIL (empty or unexpected response)" ;;
+  esac
+else
+  if [ -f /tmp/bore-pac.pid ] && kill -0 "$(cat /tmp/bore-pac.pid)" 2>/dev/null; then
+    bore_pac_state="process alive"
+  else
+    bore_pac_state="no live process"
+  fi
+  echo "  bore tunnel:    NOT connected ($bore_pac_state; no 'listening at bore.pub:$BORE_PAC_PORT' line in /tmp/bore-pac.log)"
+fi
+echo
 
 echo "Note: Codespaces' own port-forwarding list (Ports tab / \`gh codespace"
 echo "ports\`) does NOT need to show either local port -- bore's tunnel is a"

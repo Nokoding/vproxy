@@ -14,6 +14,7 @@ pkill -f 'bore local' 2>/dev/null
 pkill -f 'PROXY_WATCHDOG' 2>/dev/null
 pkill -f 'keepalive.sh' 2>/dev/null
 pkill -f 'ollama serve' 2>/dev/null
+pkill -f 'pac-server.py' 2>/dev/null
 # A quick-test-runner.sh from a PREVIOUS restart can still be mid-flight
 # here (its failure path alone takes 2+ minutes: 8s delay, up to 8 curls,
 # an 8s repair wait, a retest, a 45s Ollama call). Left alive, it holds
@@ -45,9 +46,17 @@ nohup "$SCRIPT_DIR/keepalive.sh" >/dev/null 2>&1 &
 # instead of by pattern — a pattern match on the loop's own script text
 # would kill the loop itself along with its child, leaving nothing to
 # respawn it.
+# Auth (--username/--password) is added only when PROXY_AUTH_ENABLED=1
+# (both PROXY_USERNAME and PROXY_PASSWORD set -- see proxy-env.sh). Off
+# by default: an open, unauthenticated proxy on a public bore.pub port is
+# usable by anyone who finds it, not just you -- see CLAUDE.md.
 nohup sh -c '
 while true; do
-  vproxy run --bind "0.0.0.0:$LOCAL_HTTP_PORT" http >> /tmp/vproxy.log 2>&1 &
+  if [ "$PROXY_AUTH_ENABLED" = "1" ]; then
+    vproxy run --bind "0.0.0.0:$LOCAL_HTTP_PORT" http --username "$PROXY_USERNAME" --password "$PROXY_PASSWORD" >> /tmp/vproxy.log 2>&1 &
+  else
+    vproxy run --bind "0.0.0.0:$LOCAL_HTTP_PORT" http >> /tmp/vproxy.log 2>&1 &
+  fi
   echo $! > /tmp/vproxy.pid
   wait $!
   sleep 1
@@ -57,6 +66,45 @@ nohup sh -c '
 while true; do
   bore local "$LOCAL_HTTP_PORT" --to bore.pub --port "$BORE_HTTP_PORT" >> /tmp/bore.log 2>&1 &
   echo $! > /tmp/bore.pid
+  wait $!
+  sleep 1
+done' > /dev/null 2>&1 &
+
+# .pac (Proxy Auto-Config) file so a device can be pointed at one URL
+# instead of entering host/port by hand. Always served regardless of
+# PROXY_MODE -- this is core proxy usability, not the AI/email extras
+# performance mode trims. Content is regenerated every restart from the
+# *requested* BORE_HTTP_PORT; same caveat as the "proxy address" line
+# printed at the bottom of this script -- if bore.pub fell back to a
+# random port because that one was already taken by someone else, this
+# will be wrong until the next restart (check bore.log's "listening at"
+# line, same as always). Auth (if enabled) still applies to the proxy
+# itself regardless of how a device learned its address -- vproxy
+# challenges for it independently; this file can't and doesn't carry
+# credentials, PAC has no syntax for that.
+#
+# Deliberately started here, BEFORE the TLS cert block below -- acme.sh's
+# DNS-01 flow sleeps ~120s for propagation on every issuance (every
+# rebuild, since ~/.vproxy-tls is wiped then) and has no timeout of its
+# own, so if this were started after that block the PAC endpoint would be
+# down for minutes on every rebuild/renewal, or indefinitely if acme.sh
+# ever stalls -- same reason the plain HTTP proxy above is started before
+# the TLS block too.
+mkdir -p /tmp/vproxy-pac
+printf 'function FindProxyForURL(url, host) {\n  return "PROXY bore.pub:%s";\n}\n' "$BORE_HTTP_PORT" > /tmp/vproxy-pac/proxy.pac
+
+nohup sh -c '
+while true; do
+  python3 "'"$SCRIPT_DIR"'/pac-server.py" "$LOCAL_PAC_PORT" /tmp/vproxy-pac/proxy.pac >> /tmp/pac-server.log 2>&1 &
+  echo $! > /tmp/pac-server.pid
+  wait $!
+  sleep 1
+done' > /dev/null 2>&1 &
+
+nohup sh -c '
+while true; do
+  bore local "$LOCAL_PAC_PORT" --to bore.pub --port "$BORE_PAC_PORT" >> /tmp/bore-pac.log 2>&1 &
+  echo $! > /tmp/bore-pac.pid
   wait $!
   sleep 1
 done' > /dev/null 2>&1 &
@@ -72,7 +120,11 @@ export TLS_CERT_DIR="$HOME/.vproxy-tls"
 if "$SCRIPT_DIR/tls-cert.sh"; then
   nohup sh -c '
   while true; do
-    vproxy run --bind "0.0.0.0:$LOCAL_TLS_PORT" https --tls-cert "$TLS_CERT_DIR/fullchain.pem" --tls-key "$TLS_CERT_DIR/key.pem" >> /tmp/vproxy-tls.log 2>&1 &
+    if [ "$PROXY_AUTH_ENABLED" = "1" ]; then
+      vproxy run --bind "0.0.0.0:$LOCAL_TLS_PORT" https --tls-cert "$TLS_CERT_DIR/fullchain.pem" --tls-key "$TLS_CERT_DIR/key.pem" --username "$PROXY_USERNAME" --password "$PROXY_PASSWORD" >> /tmp/vproxy-tls.log 2>&1 &
+    else
+      vproxy run --bind "0.0.0.0:$LOCAL_TLS_PORT" https --tls-cert "$TLS_CERT_DIR/fullchain.pem" --tls-key "$TLS_CERT_DIR/key.pem" >> /tmp/vproxy-tls.log 2>&1 &
+    fi
     echo $! > /tmp/vproxy-tls.pid
     wait $!
     sleep 1
@@ -157,7 +209,18 @@ fi
 nohup sh -c '
 while true; do # PROXY_WATCHDOG
   sleep 30
-  if ! curl -s -m 5 -x "http://127.0.0.1:$LOCAL_HTTP_PORT" http://example.com -o /dev/null; then
+  # Must authenticate when auth is on, same as quick-test.sh/port-check.sh
+  # -- an un-authenticated request here gets a fast 407 straight from
+  # vproxy'\''s listener (curl still exits 0 on a 407, so `! curl ...`
+  # never trips), meaning this check would always look "healthy" without
+  # ever actually routing anything upstream -- exactly the hang/outbound-
+  # break scenario this watchdog exists to catch.
+  if [ "$PROXY_AUTH_ENABLED" = "1" ]; then
+    watchdog_ok=$(curl -s -m 5 -x "http://127.0.0.1:$LOCAL_HTTP_PORT" -U "$PROXY_USERNAME:$PROXY_PASSWORD" http://example.com -o /dev/null; echo $?)
+  else
+    watchdog_ok=$(curl -s -m 5 -x "http://127.0.0.1:$LOCAL_HTTP_PORT" http://example.com -o /dev/null; echo $?)
+  fi
+  if [ "$watchdog_ok" != "0" ]; then
     echo "$(date): health check timed out, restarting" >> /tmp/proxy-watchdog.log
     [ -f /tmp/vproxy.pid ] && kill -9 "$(cat /tmp/vproxy.pid)" 2>/dev/null
     [ -f /tmp/bore.pid ] && kill -9 "$(cat /tmp/bore.pid)" 2>/dev/null
@@ -238,6 +301,7 @@ case "$DUCKDNS_DOMAIN" in
   *) DUCKDNS_FQDN="<DUCKDNS_DOMAIN unset>" ;;
 esac
 echo "proxy address (https): ${DUCKDNS_FQDN}:$BORE_TLS_PORT (only if TLS cert issuance succeeded, see /tmp/acme.log)"
+echo "auto-config (.pac):    http://bore.pub:$BORE_PAC_PORT/proxy.pac"
 if [ "$PROXY_CONFIG_IS_DEFAULT" = 1 ]; then
   echo "Using default ports (local $LOCAL_HTTP_PORT/$LOCAL_TLS_PORT, public $BORE_HTTP_PORT/$BORE_TLS_PORT). Run 'configure-proxy' to customize."
 fi
@@ -245,4 +309,9 @@ if [ "$PROXY_MODE" = "performance" ]; then
   echo "Mode: performance -- Ollama not started, routine 'all good' test emails skipped. Self-healing (auto-restart + failure emails) still active."
 else
   echo "Mode: normal. Run 'configure-proxy' to switch to performance mode (core proxy only, no AI/routine emails)."
+fi
+if [ "$PROXY_AUTH_ENABLED" = "1" ]; then
+  echo "Auth: ON -- devices must supply the configured username/password to use this proxy."
+else
+  echo "Auth: OFF -- this proxy is open to anyone who finds the address. Run 'configure-proxy' to require a username/password."
 fi

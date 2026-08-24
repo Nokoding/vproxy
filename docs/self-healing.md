@@ -1,64 +1,101 @@
 # How the self-healing works
 
+This page is about the reliability machinery: what watches what, what
+restarts what, and where to look when something seems off. For changing
+ports, the TLS domain, auth, the `.pac` URL, or performance mode, see
+[Configuration](configuration.md).
+
 ## The stack
 
 A small set of processes, watching itself:
 
-- **vproxy** — the proxy itself, running twice: a regular (plain HTTP,
-  default port 8080 → `bore.pub:54584`) and a secure (TLS, default port
-  8443 → `cdspc.duckdns.org:54585`) instance. Every one of those ports is
-  changeable — see **Changing ports or the TLS domain** below.
-- **bore** — the outbound tunnel that makes each vproxy instance reachable
-  from the internet, also running twice (one per vproxy instance).
+- **vproxy** — the proxy itself, running twice: a regular instance (plain
+  HTTP, local port 8080 → `bore.pub:54584`) and a secure one (TLS, local
+  port 8443 → `cdspc.duckdns.org:54585`). If the TLS certificate can't be
+  issued, only the secure half is skipped; the regular proxy is
+  unaffected.
+- **bore** — the outbound tunnel that makes each of those reachable from
+  the internet, running three times: once per vproxy instance, plus once
+  for the `.pac` auto-config file.
 - **A watchdog** — every 30 seconds, sends a real request through the
-  regular proxy. If it hangs or times out, kills and restarts vproxy +
-  bore — checking that things actually *work*, not just that the
+  regular proxy. If it hangs or times out, it kills and restarts vproxy +
+  bore — so it's checking that things actually *work*, not just that the
   processes are still alive.
-- **A local AI model** (Ollama, running entirely inside the Codespace) —
-  when the watchdog catches a failure, reads the recent logs and decides
-  whether it's worth emailing you about right now, versus a repeat of
-  something already reported. If the model is ever down or slow, a fixed
-  fallback rule takes over instead, so alerting never silently depends on
-  it.
-- **A startup self-test** — see below.
+- **A local AI model** (Ollama's `llama3.2:3b`, running entirely inside
+  the Codespace — nothing leaves it) — when the watchdog catches a
+  failure, it reads the recent logs and decides whether this is worth
+  emailing you about right now, or a repeat of something already
+  reported. If the model is down or slow, a fixed throttle rule takes
+  over instead, so alerting never silently depends on it.
+- **A startup self-test** — see [below](#the-startup-self-test).
 - **Email alerts** — sent via MailerSend, only when the AI (or the
   fallback rule) decides you should know.
 - **A keepalive** — quietly pokes the Codespace's terminal every 20
   minutes so GitHub's 30-minute idle auto-stop never kicks in. It has
-  nothing to do with the proxy's own health; it just rides along on the
-  same startup/restart lifecycle.
+  nothing to do with the proxy's health; it just rides along on the same
+  startup lifecycle.
 
-Every one of the above respawns automatically if it crashes or the
-Codespace itself restarts. Nothing here needs manual intervention — but if
-you ever want to force a full restart of everything:
+Every one of these respawns automatically if it crashes, and all of them
+come back if the Codespace restarts. A full Codespace *rebuild* wipes the
+container entirely — every binary, every log — and it all reinstalls and
+relaunches itself with no manual steps; your git repo and your Codespaces
+secrets are what survive.
+
+Nothing here needs manual intervention, but if you ever want to force a
+full restart:
 
 ```bash
 restart-proxy
 ```
 
-That restarts vproxy, both tunnels, the watchdog, and the local AI, then
-prints the current addresses.
+That restarts vproxy, all three tunnels, the watchdog, the keepalive, and
+the local AI, then prints the current addresses, mode, and whether auth is
+on.
 
 ## The startup self-test
 
-Every time the proxy (re)starts — including after a crash-recovery, a
-manual `restart-proxy`, or a fresh Codespace — it runs a real test against
-four sites (Discord, TikTok, YouTube, and Google), through both the
-regular and secure proxy, before declaring itself ready:
+Every time the proxy (re)starts — after a crash-recovery, a manual
+`restart-proxy`, or a fresh Codespace — it runs a real test against four
+sites (Discord, TikTok, YouTube, and Google), through both the regular and
+the secure proxy, before declaring itself ready:
 
-1. **All four pass** → you get an email confirming it's good, along with a
-   one-line comment from the local AI (skipped in performance mode — see
-   below — just a log line instead).
+1. **Everything passes** → you get an email confirming it's good, with a
+   one-line comment from the local AI. (In
+   [performance mode](configuration.md#performance-mode) this is a log
+   line instead of an email.)
 2. **Anything fails** → it restarts vproxy + bore (the same recovery the
    watchdog uses), emails you that it's attempting a repair, and re-tests.
 3. **Still failing after the repair** → you get an email with the retest
    results and the AI's best guess at a next diagnostic step. It also
-   leaves a note for the next time this repo is opened with an AI coding
-   assistant, so troubleshooting doesn't start from scratch.
+   leaves a dated note in the repo for the next time this project is
+   opened with an AI coding assistant, so troubleshooting doesn't start
+   from scratch.
 
-This means a status email after every restart, either way (unless
-everything's fine in performance mode) — you never have to go check for
-yourself whether it's actually working.
+So in normal mode there's a status email after every restart either way —
+you never have to go check for yourself whether it's actually working.
+Performance mode drops only the "everything's fine" one.
+
+## port-check
+
+If something seems down, this gives a direct, always-finishes read on
+every variant (regular, secure, and the `.pac` server): process alive,
+port actually listening, a local test request, whether the bore tunnel is
+currently connected, and a real request through the public tunnel. It also
+prints the current mode and whether auth is on:
+
+```bash
+port-check
+```
+
+It's a diagnostic report, not a health gate — it never "fails", it just
+tells you what it found.
+
+**Important:** the Codespaces "Ports" tab (and `gh codespace ports`) does
+**not** need to list these ports for the proxy to be working — in fact it
+never will. bore opens its own outbound connection to `bore.pub`,
+completely separate from Codespaces' own port-forwarding, so those ports
+being absent there is normal and not a sign of a problem. `port-check` is
+the accurate signal; the Ports tab isn't.
 
 ## Logs
 
@@ -67,77 +104,13 @@ tail -f /tmp/vproxy.log            # the regular proxy
 tail -f /tmp/vproxy-tls.log        # the secure proxy
 tail -f /tmp/bore.log              # the tunnel (regular)
 tail -f /tmp/bore-tls.log          # the tunnel (secure)
+tail -f /tmp/pac-server.log        # the .pac auto-config server
+tail -f /tmp/bore-pac.log          # the tunnel (.pac)
 tail -f /tmp/proxy-watchdog.log    # health checks and restarts
 tail -f /tmp/quick-test.log        # the startup self-test
 tail -f /tmp/ollama.log            # the local AI
 tail -f /tmp/acme.log              # the secure certificate
 ```
 
-## Changing ports or the TLS domain
-
-Every port here is configurable — the local container ports, and the
-public bore.pub ports your device actually connects to:
-
-```bash
-configure-proxy
-```
-
-It shows the current effective values and offers two ways to change them:
-
-1. **Codespaces secrets** (`LOCAL_HTTP_PORT`, `LOCAL_TLS_PORT`,
-   `BORE_HTTP_PORT`, `BORE_TLS_PORT`) — survives a full Codespace rebuild,
-   not just a stop/start. Requires a Codespace restart to take effect,
-   same as the other secrets (see `docs/setup.md`).
-2. **Enter values right there in the terminal** — takes effect
-   immediately (it offers to run `restart-proxy` for you), but is wiped
-   on a rebuild unless you also add secrets for it. This same prompt also
-   covers `PROXY_MODE` — see **Performance mode** below.
-
-A real Codespaces secret always wins over a value entered through option
-2. `restart-proxy` prints a reminder to run `configure-proxy` any time
-you're still on the defaults.
-
-## Performance mode
-
-By default (`normal` mode) the local AI model runs continuously and every
-startup self-test sends a status email. If you'd rather the Codespace's
-CPU/RAM go entirely toward the proxy itself, switch to performance mode:
-
-```bash
-configure-proxy
-```
-
-Set `PROXY_MODE` to `performance`, either as a Codespaces secret or
-through `configure-proxy`'s "enter values now" option, same as ports. In
-performance mode:
-
-- The local AI model never starts — no RAM/CPU held for it.
-- The startup self-test still runs, but only emails you if it actually
-  finds a problem (repair-attempted / still-failing emails are unchanged);
-  a clean pass just logs a line to `/tmp/quick-test.log` instead of
-  emailing.
-
-**Self-healing itself is not affected by the mode** — the watchdog still
-kills and restarts vproxy/bore on a hang, and still emails you when it
-detects a real failure, in both modes. Without the AI model running, that
-alert just uses the fixed fallback rule/wording instead of an AI-written
-diagnosis — the same thing that already happens any time the AI model is
-briefly down or slow in normal mode. `restart-proxy` and `port-check` both
-print the current mode.
-
-## Checking port health directly
-
-If something seems down, `port-check` gives a direct read on both proxy
-ports — process alive, port actually listening, a local test request, and
-a real request through the public tunnel:
-
-```bash
-port-check
-```
-
-**Important:** the Codespaces "Ports" tab (and `gh codespace ports`) does
-**not** need to list either local port for the proxy to be working. bore
-opens its own outbound connection to `bore.pub`, completely separate from
-Codespaces' own port-forwarding — so those ports showing as absent/offline
-there is normal, not a sign of a problem. `port-check` is the accurate
-signal; the Ports tab isn't.
+These live in `/tmp`, so they're wiped by a Codespace rebuild along with
+everything else in the container.

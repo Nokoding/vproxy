@@ -5,65 +5,107 @@ and works from any device — no server to rent, no domain to buy.
 
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/Nokoding/vproxy)
 
-Click that, and GitHub forks this repo to your own account and opens a
-Codespace on it — no manual forking step needed. Then add your own secrets
-(see **One-time setup** below) and you have your own copy of this proxy,
-under your own account.
+Click that and GitHub forks this repo to your own account and opens a
+Codespace on it — no manual forking step. Add four secrets
+([one-time setup](docs/setup.md)), restart the Codespace, and you have
+your own proxy under your own account.
+
+## What you get
+
+- A regular and a TLS-cloaked proxy, both reachable from any device.
+- Restarts itself on a crash, a hang, or a Codespace reboot, and rebuilds
+  itself from scratch after a full container wipe.
+- Tests itself against four real sites on every start and emails you the
+  result, so you're never guessing whether it's up. (Failures always;
+  clean passes too, unless you switch to
+  [performance mode](docs/configuration.md#performance-mode).)
+- Free: a Codespace, a free tunnel relay, a free subdomain, a free
+  certificate.
 
 ## How it works
 
-A Codespace can't take incoming connections, so vproxy reaches *out*
-instead, using [bore](https://github.com/ekzhang/bore) to open a tunnel to
-a public relay. Your device connects to that relay. The relay hands the
-traffic straight through to vproxy, running quietly inside the Codespace.
+A Codespace can't accept incoming connections, so vproxy reaches *out*
+instead, using [bore](https://github.com/ekzhang/bore) to open a tunnel
+to a public relay. Your device connects to the relay, and the relay hands
+the traffic straight through to vproxy inside the Codespace.
 
 ```
 your device  →  bore.pub  →  the Codespace  →  vproxy
 ```
 
-## Connect
+Because that relay is free and shared, expect the proxy to slow down —
+not fail — under heavy load, like a page pulling down a lot of images at
+once.
 
-Point your device's proxy settings here:
+## Connect a device
+
+Point your device's proxy settings at one of these:
 
 | Type | Address | Port |
 |---|---|---|
 | Regular | `bore.pub` | `54584` |
 | Secure (TLS) | `cdspc.duckdns.org` | `54585` |
 
-No username or password needed. These are just this fork's current
-values — every port here is yours to change (`configure-proxy`).
+Or skip typing host and port by hand and point the device at the
+auto-config URL instead: `http://bore.pub:54586/proxy.pac`.
 
-→ **[Changing ports or the TLS domain](docs/self-healing.md#changing-ports-or-the-tls-domain)**
+Prefer the secure one where your device supports it — it looks like
+ordinary encrypted web traffic to anything watching the network. One
+catch: iPhone/iPad's built-in Wi-Fi proxy settings can't use it (there's
+nowhere to say the proxy itself speaks TLS), so use the regular address
+there.
 
-Use the secure one if your device supports it — it looks like ordinary
-encrypted web traffic to anything watching the network. One catch:
-iPhone/iPad's built-in Wi-Fi proxy settings can't use the secure address —
-use the regular one there instead.
+Those are this fork's current values, and every one of them is yours to
+change. Two things worth knowing before you hand the address around:
 
-Because it runs through a free, shared relay, expect it to slow down (not
-fail) under heavy load, like a page loading a lot of images at once.
+- There's **no username or password by default**, so anyone who finds the
+  address can use your proxy.
+- `restart-proxy` prints the live addresses any time you forget them.
 
-## It fixes itself
+→ **[Ports, the TLS domain, authentication, performance mode](docs/configuration.md)**
 
-Everything restarts on its own if it crashes, hangs, or the Codespace
-reboots — including a self-test against four real sites (Discord, TikTok,
-YouTube, Google) every time it starts, with an email if anything's wrong
-so you never have to go check yourself (a status email on a clean pass
-too, unless you've switched to performance mode). It also keeps the
-Codespace itself from auto-stopping after 30 minutes idle, so it stays up
-without you needing to keep a tab open. Nothing here needs a manual
-restart, but `restart-proxy` forces one if you ever want to.
+## Get started
 
-→ **[How the self-healing works, the AI triage, and the logs](docs/self-healing.md)**
+1. Click the Codespaces badge above.
+2. Add the four secrets — see **[One-time setup](docs/setup.md)**.
+3. Stop and restart the Codespace, then connect a device using the table
+   above.
 
-## One-time setup
+Everything else — installing vproxy, the tunnels, the certificate, the
+watchdog — happens on its own the first time the Codespace is created.
 
-Add four secrets at
-[github.com/settings/codespaces](https://github.com/settings/codespaces),
-scoped to this repo, then stop and restart the Codespace. Everything else
-installs itself the first time the Codespace is created.
+## Day to day
 
-→ **[What each secret is for and where to get it](docs/setup.md)**
+Three commands, none of them required in normal use:
+
+| Command | What it does |
+|---|---|
+| `restart-proxy` | Forces a full restart; prints the current addresses, mode, and auth state |
+| `configure-proxy` | Changes ports, auth, or performance mode, interactively |
+| `port-check` | Tells you what's actually alive, listening, and reachable |
+
+It also keeps the Codespace from auto-stopping after 30 minutes idle, so
+you don't need to leave a tab open.
+
+→ **[How the self-healing works — the watchdog, the AI triage, the logs](docs/self-healing.md)**
+
+## If something seems broken
+
+Run `port-check` first. In particular, the Codespace's own "Ports" tab
+will never list these ports as active, even when everything is perfectly
+healthy — that's expected, not a symptom (bore's tunnel is a separate
+outbound connection, unrelated to Codespaces' port forwarding).
+
+→ **[port-check and the logs](docs/self-healing.md#port-check)**
+
+## Docs
+
+- **[One-time setup](docs/setup.md)** — the four secrets, where to get
+  them, and what breaks if one's missing.
+- **[Configuration](docs/configuration.md)** — ports, the TLS domain,
+  authentication, the `.pac` URL, performance mode.
+- **[How the self-healing works](docs/self-healing.md)** — the watchdog,
+  the local AI triage, the startup self-test, `port-check`, and the logs.
 
 ## Built on
 
