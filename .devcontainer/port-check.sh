@@ -84,6 +84,19 @@ case "$DUCKDNS_DOMAIN" in
   *) DUCKDNS_FQDN="" ;;
 esac
 
+# Report Ollama's actual live state, not just the configured mode --
+# they can diverge (mode changed via `configure-proxy` without a restart
+# yet, or a secret added before the Codespace stop/start that injects
+# it), and this tool exists specifically to show real state over
+# configuration/assumption (see the port-visibility gotcha below).
+if [ -f /tmp/ollama.pid ] && kill -0 "$(cat /tmp/ollama.pid)" 2>/dev/null; then
+  ollama_state="running (AI triage + routine test emails active)"
+else
+  ollama_state="not running (fixed fallback throttle rule, no routine test emails; self-healing still active)"
+fi
+echo "Mode: $PROXY_MODE (configured) -- Ollama: $ollama_state"
+echo
+
 check_stack "plain proxy" /tmp/vproxy.pid "$LOCAL_HTTP_PORT" http /tmp/bore.pid /tmp/bore.log bore.pub "$BORE_HTTP_PORT"
 
 # kill -0, not just [ -f ] -- a stale pidfile from a previous run whose

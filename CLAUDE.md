@@ -24,6 +24,17 @@ context automatically if the repo is forked and opened in a Codespace.
 Keep editing `CLAUDE.md` as the real file — don't break the symlink by
 writing to `AGENTS.md` directly or making it a separate copy.
 
+**After a major/structural change** (the same bar as the CLAUDE.md-update
+rule above — new component, changed architecture, new failure mode), run a
+bug-focused review of the diff on the Opus model at high effort before
+calling the change done: `Agent` tool, `subagent_type: general-purpose`,
+`model: opus`, briefed on what changed and why (a fresh agent has no
+context — don't just hand it a bare `git diff`). The `/code-review` skill
+itself has no way to pin the model, so invoke the review this way rather
+than through the skill. Have it report via `ReportFindings`, correctness
+bugs only (not style/simplification). Fix anything CONFIRMED before
+considering the change complete; use judgment on PLAUSIBLE findings.
+
 ## What's running and why
 
 - `vproxy` (plain HTTP) on container-local `0.0.0.0:$LOCAL_HTTP_PORT`
@@ -36,13 +47,15 @@ writing to `AGENTS.md` directly or making it a separate copy.
   Let's Encrypt cert, normal TLS handshake) on networks that block/inspect
   plain HTTP proxying. Purely additive — if TLS cert issuance fails, only
   this half is skipped; the plain HTTP proxy is unaffected.
-- All four ports are configurable, either via the matching Codespaces
-  secret (`LOCAL_HTTP_PORT`/`LOCAL_TLS_PORT`/`BORE_HTTP_PORT`/`BORE_TLS_PORT`)
+- All four ports (and, as of 2026-08-24, `PROXY_MODE`) are configurable,
+  either via the matching Codespaces secret
+  (`LOCAL_HTTP_PORT`/`LOCAL_TLS_PORT`/`BORE_HTTP_PORT`/`BORE_TLS_PORT`/`PROXY_MODE`)
   or interactively via `configure-proxy` (symlinked like `restart-proxy`).
   Added 2026-08-21. `.devcontainer/proxy-env.sh` is the single source of
   truth for resolving them — sourced by every script that needs a port
   value (`restart-proxy.sh`, `quick-test.sh`, `port-check.sh`,
-  `configure-proxy.sh`) — precedence: real Codespaces secret > entry saved
+  `configure-proxy.sh`, and now `quick-test-runner.sh` too, for
+  `PROXY_MODE`) — precedence: real Codespaces secret > entry saved
   to `~/.vproxy-config` by `configure-proxy` (survives stop/start, wiped on
   rebuild) > hardcoded default. `restart-proxy` prints a one-line reminder
   to run `configure-proxy` for as long as nothing's ever been configured
@@ -62,6 +75,32 @@ writing to `AGENTS.md` directly or making it a separate copy.
   triages failures to decide alert-worthiness, falling back to a fixed
   throttle rule if Ollama's unavailable. Alerts go out via MailerSend to
   nokodash311@gmail.com.
+- `PROXY_MODE` (`normal` default, or `performance`) — added 2026-08-24 in
+  response to the user asking to boost proxy throughput/latency. Investigated
+  first: `vproxy` itself was already well-tuned (`TCP_NODELAY` on both
+  client and outbound sockets, tokio worker threads = CPU cores). Measured
+  live that the actual ceiling is the bore.pub free relay itself (~14.5MB/s
+  vs ~122MB/s direct, +~275ms latency vs direct) — not something a mode
+  can move. So `PROXY_MODE` instead trims background load competing with
+  the proxy for the Codespace's CPU/RAM: in `performance`, `restart-proxy.sh`
+  never starts `ollama serve` at all (the resident 3B model otherwise held
+  RAM/CPU continuously via `OLLAMA_KEEP_ALIVE=-1`), and
+  `quick-test-runner.sh` skips its routine "all good" startup-test email
+  (logged to `/tmp/quick-test.log` instead). Self-healing is explicitly
+  NOT gated by mode: crash/hang auto-restart and the emails for an actual
+  detected failure fire the same in both modes — every Ollama call site
+  (`ai-triage.sh`, `quick-test-runner.sh`'s `ask_ollama`) already treats a
+  down Ollama as a normal case (connection refused, fails fast, falls back
+  to the fixed-throttle rule / generic text), the same path either mode
+  already takes whenever Ollama is merely slow to (re)start in normal mode
+  — so no separate fallback logic was needed for performance mode itself.
+  Resolved via the same secret > `~/.vproxy-config` > default precedence as
+  the ports (`proxy-env.sh`), settable via `configure-proxy` (option 2's
+  prompts) or the `PROXY_MODE` Codespaces secret. `restart-proxy` and
+  `port-check` both print the current mode. Verified live: performance
+  mode restart left `ollama serve` un-started, proxy still fully healthy
+  end-to-end, quick-test logged its "all good" line without emailing;
+  restarting again with no `PROXY_MODE` set brought Ollama back.
 - `port-check.sh` (symlinked to `/usr/local/bin/port-check`, same pattern
   as `restart-proxy`) is an on-demand troubleshooting command: for each
   proxy port, reports process-alive, actually-listening, a local curl
@@ -154,7 +193,8 @@ available in the Codespace without a manual reinstall step after a rebuild.
   (`${VAR:+1}` on the raw incoming env, before defaults are ever applied),
   then `unset`-ing exactly the non-secret ones right before calling
   `restart-proxy` so the child re-resolves cleanly from the new config
-  file. Verified live after the fix: 9090/9443 came up correctly. Worth
+  file. `PROXY_MODE` (added 2026-08-24) follows the exact same
+  capture/unset pattern as a fifth var. Verified live after the fix: 9090/9443 came up correctly. Worth
   remembering for any other script that both sources `proxy-env.sh` for
   its own display/logic AND shells out to another script that also
   sources it.
@@ -242,7 +282,8 @@ Set via Settings → Codespaces secrets, scoped to this repo:
 
 Optional, all have working defaults if unset (see "What's running and
 why" above) — `LOCAL_HTTP_PORT`, `LOCAL_TLS_PORT`, `BORE_HTTP_PORT`,
-`BORE_TLS_PORT`. Easiest set via `configure-proxy` rather than by hand.
+`BORE_TLS_PORT`, `PROXY_MODE`. Easiest set via `configure-proxy` rather
+than by hand.
 
 ## Loose ends / not yet wired up
 

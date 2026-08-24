@@ -24,4 +24,21 @@ LOCAL_TLS_PORT="${LOCAL_TLS_PORT:-8443}"
 BORE_HTTP_PORT="${BORE_HTTP_PORT:-54584}"
 BORE_TLS_PORT="${BORE_TLS_PORT:-54585}"
 
-export LOCAL_HTTP_PORT LOCAL_TLS_PORT BORE_HTTP_PORT BORE_TLS_PORT PROXY_CONFIG_IS_DEFAULT
+# "performance" skips the Ollama model entirely (restart-proxy.sh never
+# starts `ollama serve`, freeing the RAM/CPU it'd otherwise hold resident)
+# and quick-test-runner.sh skips its routine "all good" email -- core
+# proxy functionality only. Self-healing (crash/hang auto-restart, and
+# emailing when a real failure is detected) is NOT gated by this: it
+# stays on in both modes, just using the fixed-throttle fallback instead
+# of an AI-written diagnosis, the same fallback either mode already falls
+# back to whenever Ollama is unavailable. Any value other than exactly
+# "performance" is treated as normal -- a typo'd secret (e.g.
+# "Performance") fails safe to normal rather than landing in some
+# undefined third state. Both `restart-proxy` and `port-check` print the
+# resolved mode, so a typo is still discoverable, just not rejected here.
+case "$PROXY_MODE" in
+  performance) : ;;
+  *) PROXY_MODE="normal" ;;
+esac
+
+export LOCAL_HTTP_PORT LOCAL_TLS_PORT BORE_HTTP_PORT BORE_TLS_PORT PROXY_CONFIG_IS_DEFAULT PROXY_MODE

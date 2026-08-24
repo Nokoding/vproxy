@@ -47,7 +47,8 @@ four sites (Discord, TikTok, YouTube, and Google), through both the
 regular and secure proxy, before declaring itself ready:
 
 1. **All four pass** → you get an email confirming it's good, along with a
-   one-line comment from the local AI.
+   one-line comment from the local AI (skipped in performance mode — see
+   below — just a log line instead).
 2. **Anything fails** → it restarts vproxy + bore (the same recovery the
    watchdog uses), emails you that it's attempting a repair, and re-tests.
 3. **Still failing after the repair** → you get an email with the retest
@@ -55,8 +56,9 @@ regular and secure proxy, before declaring itself ready:
    leaves a note for the next time this repo is opened with an AI coding
    assistant, so troubleshooting doesn't start from scratch.
 
-This means a status email after every restart, either way — you never
-have to go check for yourself whether it's actually working.
+This means a status email after every restart, either way (unless
+everything's fine in performance mode) — you never have to go check for
+yourself whether it's actually working.
 
 ## Logs
 
@@ -88,11 +90,40 @@ It shows the current effective values and offers two ways to change them:
    same as the other secrets (see `docs/setup.md`).
 2. **Enter values right there in the terminal** — takes effect
    immediately (it offers to run `restart-proxy` for you), but is wiped
-   on a rebuild unless you also add secrets for it.
+   on a rebuild unless you also add secrets for it. This same prompt also
+   covers `PROXY_MODE` — see **Performance mode** below.
 
 A real Codespaces secret always wins over a value entered through option
 2. `restart-proxy` prints a reminder to run `configure-proxy` any time
 you're still on the defaults.
+
+## Performance mode
+
+By default (`normal` mode) the local AI model runs continuously and every
+startup self-test sends a status email. If you'd rather the Codespace's
+CPU/RAM go entirely toward the proxy itself, switch to performance mode:
+
+```bash
+configure-proxy
+```
+
+Set `PROXY_MODE` to `performance`, either as a Codespaces secret or
+through `configure-proxy`'s "enter values now" option, same as ports. In
+performance mode:
+
+- The local AI model never starts — no RAM/CPU held for it.
+- The startup self-test still runs, but only emails you if it actually
+  finds a problem (repair-attempted / still-failing emails are unchanged);
+  a clean pass just logs a line to `/tmp/quick-test.log` instead of
+  emailing.
+
+**Self-healing itself is not affected by the mode** — the watchdog still
+kills and restarts vproxy/bore on a hang, and still emails you when it
+detects a real failure, in both modes. Without the AI model running, that
+alert just uses the fixed fallback rule/wording instead of an AI-written
+diagnosis — the same thing that already happens any time the AI model is
+briefly down or slow in normal mode. `restart-proxy` and `port-check` both
+print the current mode.
 
 ## Checking port health directly
 

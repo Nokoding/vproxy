@@ -47,11 +47,12 @@ fail) under heavy load, like a page loading a lot of images at once.
 
 Everything restarts on its own if it crashes, hangs, or the Codespace
 reboots — including a self-test against four real sites (Discord, TikTok,
-YouTube, Google) every time it starts, with an email either way so you
-never have to go check yourself. It also keeps the Codespace itself from
-auto-stopping after 30 minutes idle, so it stays up without you needing to
-keep a tab open. Nothing here needs a manual restart, but `restart-proxy`
-forces one if you ever want to.
+YouTube, Google) every time it starts, with an email if anything's wrong
+so you never have to go check yourself (a status email on a clean pass
+too, unless you've switched to performance mode). It also keeps the
+Codespace itself from auto-stopping after 30 minutes idle, so it stays up
+without you needing to keep a tab open. Nothing here needs a manual
+restart, but `restart-proxy` forces one if you ever want to.
 
 → **[How the self-healing works, the AI triage, and the logs](docs/self-healing.md)**
 

@@ -100,14 +100,30 @@ fi
 # default, so a failure after a quiet stretch doesn't pay the ~30s
 # reload cost. Pre-warm with a throwaway request so it's already loaded
 # before the first real failure ever needs it.
-nohup env OLLAMA_KEEP_ALIVE=-1 sh -c '
-while true; do
-  ollama serve >> /tmp/ollama.log 2>&1 &
-  echo $! > /tmp/ollama.pid
-  wait $!
-  sleep 1
-done' > /dev/null 2>&1 &
-(sleep 3; curl -s -m 60 http://127.0.0.1:11434/api/chat -d '{"model":"llama3.2:3b","stream":false,"messages":[{"role":"user","content":"hi"}]}' > /dev/null 2>&1) &
+#
+# Skipped entirely in performance mode ($PROXY_MODE, see proxy-env.sh) --
+# frees the RAM/CPU the resident model would otherwise hold for core
+# proxy throughput. Nothing else needs to know: every ai-triage.sh /
+# ask_ollama call already treats a down Ollama as a normal, handled case
+# (connection refused, fails fast, falls back) since that's also what
+# happens whenever Ollama is merely slow to (re)start in normal mode.
+if [ "$PROXY_MODE" != "performance" ]; then
+  nohup env OLLAMA_KEEP_ALIVE=-1 sh -c '
+  while true; do
+    ollama serve >> /tmp/ollama.log 2>&1 &
+    echo $! > /tmp/ollama.pid
+    wait $!
+    sleep 1
+  done' > /dev/null 2>&1 &
+  (sleep 3; curl -s -m 60 http://127.0.0.1:11434/api/chat -d '{"model":"llama3.2:3b","stream":false,"messages":[{"role":"user","content":"hi"}]}' > /dev/null 2>&1) &
+else
+  # Stale pidfile from a previous normal-mode run would otherwise survive
+  # a mode switch -- same class of bug as the vproxy-tls/bore-tls stale
+  # pidfiles fixed elsewhere in this file; port-check.sh's mode line
+  # trusts this file's kill -0 result, so a leftover PID (however
+  # unlikely to get reused) shouldn't be left around to read.
+  rm -f /tmp/ollama.pid
+fi
 
 # Watchdog for the case where vproxy hangs instead of exiting (no crash,
 # so the loop above wouldn't catch it): every 30s, send a real request
@@ -120,10 +136,24 @@ done' > /dev/null 2>&1 &
 # writes a plain-English guess at the cause, instead of a fixed timer.
 # If Ollama is down/slow/returns something unusable, ai-triage.sh exits
 # 1 and we fall back to the old fixed-throttle rule (first failure
-# always alerts, then throttled to 15 min unless escalating), so
-# alerting never silently depends on the model being up. Recovery kill
-# +respawn above already happened unconditionally before any of this,
-# so the ~10-15s the model takes never delays actual recovery.
+# always alerts, then throttled to 15 min), so alerting never silently
+# depends on the model being up. Recovery kill+respawn above already
+# happened unconditionally before any of this, so the ~10-15s the model
+# takes never delays actual recovery.
+#
+# In performance mode (PROXY_MODE, see proxy-env.sh) Ollama never starts,
+# so this fallback is the ONLY alerting path for the whole outage, not
+# just an occasional gap-filler -- an earlier version of this fallback
+# also had a "count % 3 == 0" escalation clause on top of the 15-min
+# throttle, meant to alert more often on a worsening run. At this loop's
+# 30s cadence that fired every ~90s, i.e. it wasn't really throttling at
+# all. Mostly latent in normal mode (Ollama's own judgment call usually
+# wins instead), but always active in performance mode, so a mode meant
+# to cut email volume was instead emailing ~34x/hour during any real
+# outage. Found 2026-08-24 by an Opus review of the performance-mode
+# change itself (see CLAUDE.md's post-change bug check rule) -- removed
+# the escalation clause; first-failure + 15-min throttle is the only rule
+# now, matching what this comment already claimed it did.
 nohup sh -c '
 while true; do # PROXY_WATCHDOG
   sleep 30
@@ -148,7 +178,7 @@ while true; do # PROXY_WATCHDOG
       diagnosis=$(printf "%s" "$ai_result" | jq -r ".diagnosis")
     else
       echo "$(date): ai-triage unavailable, using fallback throttle rule" >> /tmp/proxy-watchdog.log
-      if [ "$was_unhealthy" = 0 ] || [ $(( now - last )) -ge 900 ] || [ $(( count % 3 )) -eq 0 ]; then
+      if [ "$was_unhealthy" = 0 ] || [ $(( now - last )) -ge 900 ]; then
         should_alert=true
       else
         should_alert=false
@@ -210,4 +240,9 @@ esac
 echo "proxy address (https): ${DUCKDNS_FQDN}:$BORE_TLS_PORT (only if TLS cert issuance succeeded, see /tmp/acme.log)"
 if [ "$PROXY_CONFIG_IS_DEFAULT" = 1 ]; then
   echo "Using default ports (local $LOCAL_HTTP_PORT/$LOCAL_TLS_PORT, public $BORE_HTTP_PORT/$BORE_TLS_PORT). Run 'configure-proxy' to customize."
+fi
+if [ "$PROXY_MODE" = "performance" ]; then
+  echo "Mode: performance -- Ollama not started, routine 'all good' test emails skipped. Self-healing (auto-restart + failure emails) still active."
+else
+  echo "Mode: normal. Run 'configure-proxy' to switch to performance mode (core proxy only, no AI/routine emails)."
 fi

@@ -23,6 +23,7 @@ _secret_local_http="${LOCAL_HTTP_PORT:+1}"
 _secret_local_tls="${LOCAL_TLS_PORT:+1}"
 _secret_bore_http="${BORE_HTTP_PORT:+1}"
 _secret_bore_tls="${BORE_TLS_PORT:+1}"
+_secret_proxy_mode="${PROXY_MODE:+1}"
 
 . "$SCRIPT_DIR/proxy-env.sh"
 
@@ -34,6 +35,7 @@ echo "  Local TLS port (container):   $LOCAL_TLS_PORT"
 echo "  Bore HTTP port (public):      $BORE_HTTP_PORT  -> bore.pub:$BORE_HTTP_PORT"
 echo "  Bore TLS port (public):       $BORE_TLS_PORT  -> bore.pub:$BORE_TLS_PORT"
 echo "  TLS domain (DuckDNS):         ${DUCKDNS_DOMAIN:-<not set>}"
+echo "  Mode:                         $PROXY_MODE  (performance = core proxy only, no Ollama/routine emails; self-healing stays on either way)"
 echo
 echo "How do you want to set custom values?"
 echo "  1) Codespaces secrets (recommended) -- survives a full Codespace rebuild, not just a stop/start"
@@ -56,6 +58,7 @@ container start:
   BORE_HTTP_PORT    public bore.pub port for the plain proxy    (default 54584)
   BORE_TLS_PORT     public bore.pub port for the TLS proxy      (default 54585)
   DUCKDNS_DOMAIN    TLS hostname's bare subdomain (see docs/setup.md)
+  PROXY_MODE        "normal" or "performance" (default normal)
 
 Any left unset keep using their current/default value shown above. If a
 BORE_HTTP_PORT/BORE_TLS_PORT you pick is already taken by someone else on
@@ -77,6 +80,7 @@ EOF
     new_local_tls=$(ask "Local TLS port" "$LOCAL_TLS_PORT")
     new_bore_http=$(ask "Bore HTTP (public) port" "$BORE_HTTP_PORT")
     new_bore_tls=$(ask "Bore TLS (public) port" "$BORE_TLS_PORT")
+    new_proxy_mode=$(ask "Mode: normal or performance" "$PROXY_MODE")
 
     for p in "$new_local_http" "$new_local_tls" "$new_bore_http" "$new_bore_tls"; do
       case "$p" in
@@ -100,6 +104,14 @@ EOF
       exit 1
     fi
 
+    case "$new_proxy_mode" in
+      normal|performance) ;;
+      *)
+        echo "Invalid mode: '$new_proxy_mode' -- must be 'normal' or 'performance'. Aborting, nothing changed." >&2
+        exit 1
+        ;;
+    esac
+
     {
       echo "# Written by configure-proxy on $(date -u '+%Y-%m-%d %H:%M:%SZ')."
       echo "# Only takes effect for whichever of these DON'T already have a"
@@ -110,6 +122,7 @@ EOF
       echo "LOCAL_TLS_PORT=\"\${LOCAL_TLS_PORT:-$new_local_tls}\""
       echo "BORE_HTTP_PORT=\"\${BORE_HTTP_PORT:-$new_bore_http}\""
       echo "BORE_TLS_PORT=\"\${BORE_TLS_PORT:-$new_bore_tls}\""
+      echo "PROXY_MODE=\"\${PROXY_MODE:-$new_proxy_mode}\""
     } > "$CONFIG_FILE"
 
     echo
@@ -123,6 +136,7 @@ EOF
         [ -z "$_secret_local_tls" ] && unset LOCAL_TLS_PORT
         [ -z "$_secret_bore_http" ] && unset BORE_HTTP_PORT
         [ -z "$_secret_bore_tls" ] && unset BORE_TLS_PORT
+        [ -z "$_secret_proxy_mode" ] && unset PROXY_MODE
         restart-proxy
         ;;
     esac

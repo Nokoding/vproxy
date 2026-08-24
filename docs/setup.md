@@ -31,6 +31,15 @@ Every port is also changeable — the four secrets below, or the
 
 → **[Changing ports or the TLS domain](self-healing.md#changing-ports-or-the-tls-domain)**
 
+## Performance mode (optional)
+
+Set the `PROXY_MODE` secret to `performance` (or use `configure-proxy`) to
+run core proxy functionality only: the local AI model never starts, and
+the routine "all good" startup-test email is skipped. Self-healing —
+auto-restart on crash/hang, and emailing when a real failure is detected
+— stays on either way. Default is `normal` (AI triage + routine emails
+on). See [self-healing.md](self-healing.md#performance-mode) for details.
+
 ## After adding secrets
 
 Stop and restart the Codespace — a new terminal in the same running
@@ -49,3 +58,4 @@ pieces, and everything else keeps working if one is missing:
   proxy is unaffected either way.
 - No `LOCAL_HTTP_PORT`/`LOCAL_TLS_PORT`/`BORE_HTTP_PORT`/`BORE_TLS_PORT`:
   every port just uses its default above — nothing else is affected.
+- No `PROXY_MODE`: runs in `normal` mode (AI triage + routine emails on).

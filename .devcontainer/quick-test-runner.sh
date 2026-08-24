@@ -27,6 +27,7 @@ ALERT_SCRIPT="$SCRIPT_DIR/alert-email.sh"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 CLAUDE_MD="$REPO_ROOT/CLAUDE.md"
 NOTES_DIR="$REPO_ROOT/.devcontainer/notes"
+. "$SCRIPT_DIR/proxy-env.sh"
 
 # $1 = system prompt, $2 = user content. Prints Ollama's plain-text reply on
 # success. On any failure (Ollama down/slow/empty response) prints nothing
@@ -52,6 +53,14 @@ FIRST_OUTPUT="$QT_OUTPUT"
 FIRST_RESULT=$QT_RESULT
 
 if [ "$FIRST_RESULT" -eq 0 ]; then
+  # Performance mode: no issue, so no AI call and no routine "it's fine"
+  # email -- just leave a line in the log (redirected there by
+  # restart-proxy.sh) for anyone who goes looking. Self-repair + issue
+  # emails below are unaffected: they're gated on FIRST_RESULT, not mode.
+  if [ "$PROXY_MODE" = "performance" ]; then
+    echo "$(date -u '+%Y-%m-%d %H:%M:%SZ') quick test: all good (performance mode, no email)"
+    exit 0
+  fi
   comment=$(ask_ollama \
     "You are a monitoring assistant for a personal proxy server. A startup quick test just ran and every site passed. Write one short, plain-English sentence confirming the proxy is ready to use." \
     "$FIRST_OUTPUT")
