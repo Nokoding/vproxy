@@ -73,7 +73,6 @@ echo "Subnet:  $SUBNET"
 echo "Image:   $IMG"
 echo "Domains: $(echo "$ADS" | tr '\n' ' ')"
 echo "Trying every ${PAUSE}s. Leave this tab open. It stops when the server is created."
-echo "The line below updates in place. It only prints something new on success or an error."
 echo
 
 n=0
@@ -89,7 +88,6 @@ while true; do
     rc=$?
     if [ $rc -eq 0 ]; then
       ID="$(echo "$out" | jq -r '.data.id')"
-      printf '\n'
       echo "$(date +%T)  attempt $n  $AD  CREATED"
       echo "Instance: $ID"
       echo "Waiting a minute for the public IP..."
@@ -102,10 +100,8 @@ while true; do
       exit 0
     fi
     if echo "$out" | grep -qiE 'out of (host )?capacity|TooManyRequests|InternalError|Out of host capacity'; then
-      # One line that rewrites itself, so a fast loop does not scroll the screen.
-      printf '\r%s  attempt %s  no room yet   ' "$(date +%T)" "$n"
+      echo "$(date +%T)  attempt $n  $AD  no room yet"
     else
-      printf '\n'
       echo "$(date +%T)  attempt $n  $AD  stopped on an error:"
       echo "$out" | head -20
       notify "ARM retry stopped" "The ARM retry script stopped on an error. Look at Cloud Shell."
