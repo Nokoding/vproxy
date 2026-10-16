@@ -230,6 +230,22 @@ considering the change complete; use judgment on PLAUSIBLE findings.
   (`pkill -f 'keepalive.sh'` on startup) — otherwise unrelated to the
   proxy itself, just piggybacking on the same lifecycle hook.
 
+## Oracle Cloud side branch (`oracle-micro`, 2026-10-16)
+
+Not part of the Codespace setup and not on `main`. The `oracle-micro` branch
+adds an `oracle/` folder for running this fork as a 24/7 proxy on an Oracle
+Cloud Always Free Ubuntu VM instead (real public IP, so no bore tunnels, no
+TLS/DuckDNS, no Ollama, no MailerSend; systemd `Restart=always` replaces the
+watchdog):
+
+- `oracle/oracle-vproxy-setup.sh` builds from source on an Ampere A1 VM.
+- `oracle/oracle-vproxy-setup-micro.sh` installs `oracle/vproxy-linux-x86_64.gz`
+  (prebuilt from `main` at 9d4a8bb, v2.5.5, needs glibc 2.34 or older) on the
+  1 GB AMD Micro, which can not compile vproxy. Run it with
+  `VPROXY_BIN=<path or URL of the .gz>`.
+- Both open ports 8080 (proxy, with login) and 8090 (.pac) in the VM's iptables.
+  The VCN security list needs matching TCP ingress rules in the Oracle console.
+
 ## Everything is ephemeral except git + Codespaces secrets
 
 A Codespace *rebuild* wipes the whole container filesystem — installed
