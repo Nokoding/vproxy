@@ -247,7 +247,9 @@ watchdog):
   create a free A1 ARM server (1 OCPU, 6 GB, Ubuntu 24.04) in each availability domain
   until Oracle has capacity, then prints the public IP. Reason: the Micro's internet
   bandwidth is capped by Oracle at 50 Mbps (measured 51 down, 53 up), while A1 bandwidth
-  scales with OCPUs. Untested against a real tenancy as of 2026-10-16.
+  scales with OCPUs. It can also email the owner when the server is created, through the
+  free ntfy.sh relay (asks for the address at start). Untested against a real tenancy as of
+  2026-10-16.
 - Both open ports 8080 (proxy, with login) and 8090 (.pac) in the VM's iptables.
   The VCN security list needs matching TCP ingress rules in the Oracle console.
 

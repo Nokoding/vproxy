@@ -4,6 +4,12 @@
 # Needs ~/ssh-key.key in Cloud Shell (the private key you uploaded).
 # It stops by itself when the server is created. Ctrl-C stops it earlier.
 #
+# Optional email: it asks for an address at the start. If you give one, it sends a
+# short message through the free ntfy.sh service when the server is created or when
+# the script stops on an error. The message holds the public IP and nothing secret.
+# Leave the question blank to skip. Install the ntfy app and subscribe to the topic
+# it prints if you also want a push notification on your phone.
+#
 # Creates: vproxy-arm, VM.Standard.A1.Flex, 1 OCPU, 6 GB, Ubuntu 24.04 (aarch64),
 # in the first subnet it finds in your root compartment, with a public IP.
 # Free allowance is 2 OCPU and 12 GB of ARM total, so this leaves half for later.
@@ -34,6 +40,22 @@ if [ -z "$T" ]; then
   echo "  OCI_TENANCY=ocid1.tenancy.oc1..xxxx bash arm-retry.sh"
   exit 1
 fi
+
+NOTIFY_EMAIL="${NOTIFY_EMAIL:-}"
+if [ -z "$NOTIFY_EMAIL" ] && [ -t 0 ]; then
+  read -r -p "Email me when it is created? Type an address, or press Enter to skip: " NOTIFY_EMAIL
+fi
+NTFY_TOPIC="${NTFY_TOPIC:-vproxy-arm-$(head -c 24 /dev/urandom | base64 | tr -dc 'a-z0-9' | head -c 16)}"
+notify() {
+  [ -n "$NOTIFY_EMAIL" ] || return 0
+  curl -fsS -m 15 -H "Email: $NOTIFY_EMAIL" -H "Title: $1" -d "$2" "https://ntfy.sh/$NTFY_TOPIC" >/dev/null 2>&1 \
+    && echo "Sent a notification to $NOTIFY_EMAIL (ntfy topic: $NTFY_TOPIC)" \
+    || echo "Could not send the email. Check the console yourself."
+}
+if [ -n "$NOTIFY_EMAIL" ]; then
+  echo "Will email $NOTIFY_EMAIL when done. Check spam if it does not show up."
+fi
+echo
 
 echo "Looking up the network, image and availability domains..."
 SUBNET="$(oci network subnet list --compartment-id "$T" --lifecycle-state AVAILABLE \
@@ -70,9 +92,11 @@ while true; do
       echo "Instance: $ID"
       echo "Waiting a minute for the public IP..."
       sleep 60
-      oci compute instance list-vnics --instance-id "$ID" \
-        --query 'data[0]."public-ip"' --raw-output 2>/dev/null
-      echo "Log in with: ssh -i ~/ssh-key.key ubuntu@THAT_IP"
+      IP="$(oci compute instance list-vnics --instance-id "$ID" \
+        --query 'data[0]."public-ip"' --raw-output 2>/dev/null)"
+      echo "Public IP: ${IP:-not shown yet, check the console}"
+      echo "Log in with: ssh -i ~/ssh-key.key ubuntu@${IP:-THE_IP}"
+      notify "ARM server created" "Your vproxy-arm server is up. Public IP: ${IP:-check the console}. Log in with: ssh -i ssh-key.key ubuntu@${IP:-THE_IP}"
       exit 0
     fi
     if echo "$out" | grep -qiE 'out of (host )?capacity|TooManyRequests|InternalError|Out of host capacity'; then
@@ -80,6 +104,7 @@ while true; do
     else
       echo "$(date +%T)  attempt $n  $AD  stopped on an error:"
       echo "$out" | head -20
+      notify "ARM retry stopped" "The ARM retry script stopped on an error. Look at Cloud Shell."
       exit 1
     fi
     sleep "$PAUSE"
