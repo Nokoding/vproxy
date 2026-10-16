@@ -243,6 +243,11 @@ watchdog):
   (prebuilt from `main` at 9d4a8bb, v2.5.5, needs glibc 2.34 or older) on the
   1 GB AMD Micro, which can not compile vproxy. Run it with
   `VPROXY_BIN=<path or URL of the .gz>`.
+- `oracle/arm-retry.sh` is run in Oracle Cloud Shell, not on the VM. It keeps trying to
+  create a free A1 ARM server (1 OCPU, 6 GB, Ubuntu 24.04) in each availability domain
+  until Oracle has capacity, then prints the public IP. Reason: the Micro's internet
+  bandwidth is capped by Oracle at 50 Mbps (measured 51 down, 53 up), while A1 bandwidth
+  scales with OCPUs. Untested against a real tenancy as of 2026-10-16.
 - Both open ports 8080 (proxy, with login) and 8090 (.pac) in the VM's iptables.
   The VCN security list needs matching TCP ingress rules in the Oracle console.
 
